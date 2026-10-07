@@ -1,0 +1,337 @@
+/* Workspace Notifications: native workspace typography and one anchored popup. */
+.wn-title-overlay {
+  position: static;
+  display: none;
+  align-items: center;
+  overflow: hidden;
+  font: inherit;
+  letter-spacing: inherit;
+  pointer-events: none;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  z-index: 2;
+}
+.wn-title-overlay.wn-show { display: flex; }
+.wn-title-text { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wn-score { font-variant-numeric: tabular-nums; }
+.wn-notification-bar:focus-visible, #wn-feed-panel :is(button, input, summary):focus-visible { outline: 2px solid AccentColor; outline-offset: 2px; }
+#wn-feed-panel {
+  --panel-padding: 0;
+  --wn-line: var(--panel-separator-color, light-dark(rgb(0 0 0 / 9%), rgb(255 255 255 / 10%)));
+  --wn-radius: var(--toolbarbutton-border-radius, 6px);
+  --wn-accent: var(--zen-primary-color, AccentColor);
+  --wn-muted: light-dark(#66666d, #b3b3bc);
+  --wn-hover: var(--toolbarbutton-background-color-hover, light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 7%)));
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  color: var(--panel-color);
+}
+#wn-feed-panel .wn-wrap {
+  display: flex;
+  flex-direction: column;
+  max-height: min(600px, calc(100vh - 100px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  font: menu;
+  font-size: 12px;
+  color: inherit;
+}
+#wn-feed-panel .wn-wrap > * { flex-shrink: 0; }
+#wn-feed-panel .wn-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wn-line);
+  background: var(--panel-background, var(--arrowpanel-background));
+}
+#wn-feed-panel .wn-header .wn-settings {
+  margin-inline-start: auto;
+  min-height: 26px;
+  width: 30px;
+  padding: 3px 0;
+  background: transparent;
+  box-shadow: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#wn-feed-panel .wn-header .wn-settings .wn-ico { width: 15px; height: 15px; min-width: 15px; }
+#wn-feed-panel .wn-header .wn-settings:hover:not(:disabled) { background: var(--wn-hover); }
+.wn-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-sub, .wn-acc, .wn-ts, .wn-src-status, .wn-conn-sub, .wn-tab-url { color: var(--wn-muted); font-size: 11px; }
+.wn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px 10px; border-bottom: 1px solid var(--wn-line); }
+.wn-list { max-height: none; overflow: visible; padding: 0 6px 6px; }
+.wn-item { position: relative; margin: 0; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--wn-line); border-radius: 0; background: transparent; }
+.wn-item-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
+.wn-svc { font-size: 11px; font-weight: 600; flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-acc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-ts { margin-inline-start: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-sum, .wn-conn-title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+#wn-feed-panel .wn-sum { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wn-det { color: var(--wn-muted); font-size: 11px; line-height: 1.45; margin-top: 2px; overflow-wrap: anywhere; }
+.wn-item-actions, .wn-conn-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+#wn-feed-panel .wn-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  min-height: 28px;
+  padding: 5px 9px;
+  background: var(--wn-hover);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms;
+  box-shadow: none;
+}
+#wn-feed-panel .wn-btn:hover:not(:disabled) { background: var(--wn-hover); }
+#wn-feed-panel .wn-btn:disabled { opacity: .45; cursor: default; }
+#wn-feed-panel .wn-btn.wn-on { border-color: AccentColor; background: color-mix(in srgb, AccentColor 10%, transparent); }
+#wn-feed-panel .wn-actions .wn-btn:first-child, #wn-feed-panel .wn-tab .wn-btn { background: AccentColor; color: AccentColorText; border-color: transparent; }
+#wn-feed-panel .wn-actions .wn-btn:first-child:hover, #wn-feed-panel .wn-tab .wn-btn:hover { filter: brightness(.95); }
+.wn-empty { padding: 20px 16px; text-align: center; color: var(--wn-muted); line-height: 1.5; }
+.wn-foot { padding: 10px 12px; border-top: 1px solid var(--wn-line); color: var(--wn-muted); font-size: 11px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-note, .wn-hint { padding: 12px 16px; color: var(--wn-muted); font-size: 11px; line-height: 1.6; }
+.wn-h2 { font-size: 12px; font-weight: 600; padding: 14px 16px 8px; }
+.wn-conn { padding: 10px 12px; border-bottom: 1px solid var(--wn-line); }
+.wn-conn-sub { margin-top: 4px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; }
+.wn-tab { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--wn-line); }
+.wn-tab-info { flex: 1; min-width: 0; }
+.wn-tab-title { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-tab-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
+.wn-game { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--wn-line); }
+.wn-game-label { width: 100%; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; overflow-wrap: anywhere; }
+.wn-search-row { display: flex; gap: 8px; padding: 4px 16px 16px; }
+#wn-feed-panel .wn-search { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--wn-line); border-radius: 7px; background: var(--toolbar-field-background-color); color: inherit; font: inherit; }
+.wn-more { margin-top: 12px; color: var(--wn-muted); font-size: 11px; }
+.wn-more > summary { cursor: pointer; width: fit-content; padding: 4px 0; border-radius: 3px; }
+.wn-more > .wn-conn-btns { color: var(--panel-color); }
+.wn-diagnostics { padding: 0 16px 16px; }
+.wn-diag { white-space: pre-wrap; font: 10px / 1.6 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; border-radius: 7px; background: var(--wn-hover); }
+@media (prefers-reduced-motion: reduce) { #wn-feed-panel .wn-btn { transition: none; } .wn-notification-bar .wn-title-overlay { transition: none; } }
+
+#wn-feed-panel .wn-item-link { appearance: none; display: block; width: 100%; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; text-align: start; cursor: pointer; }
+#wn-feed-panel .wn-item-link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+#wn-feed-panel .wn-item-link:disabled { cursor: default; }
+#wn-feed-panel .wn-dismiss { min-height: 26px; padding: 3px 8px; color: var(--wn-muted); }
+
+/* Score strip: away logo, "24 – 27" score line, home logo. Full team names live in captions/accessibility labels. */
+.wn-scoreboard { display: inline-flex; align-items: center; justify-content: center; gap: 10px; vertical-align: middle; color: inherit; max-width: 100%; }
+.wn-team-logo { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; }
+.wn-team-logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.wn-team-initials { border-radius: 50%; background: color-mix(in srgb, currentColor 10%, transparent); font-size: 8px; font-weight: 600; }
+.wn-score-line { font-size: 15px; font-weight: 700; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.wn-title-overlay.wn-score { background: transparent; overflow: visible; }
+.wn-title-text:has(.wn-scoreboard) { display: flex; align-items: center; justify-content: flex-start; overflow: visible; }
+.wn-title-text .wn-scoreboard { width: auto; max-width: 100px; gap: 6px; }
+.wn-title-text .wn-team-logo { width: 16px; height: 16px; }
+.wn-title-text .wn-score-line { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.wn-match-caption { display: block; color: var(--wn-muted); font-size: 11px; font-weight: 400; margin-top: 7px; }
+#wn-feed-panel .wn-sum .wn-match-caption { margin-top: 6px; text-align: start; }
+.wn-game-label { padding: 4px 0; }
+.wn-picker { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--wn-line); }
+.wn-picker > summary { color: var(--panel-color); font-size: 12px; font-weight: 500; }
+.wn-picker .wn-tab { padding-inline: 0; }
+.wn-picker .wn-empty { padding: 12px 0 4px; text-align: start; font-size: 11px; }
+
+/* Real row placement immediately before Zen's workspace action/menu button. */
+.wn-notification-bar { order: 4; display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-inline-start: auto; max-width: 132px; cursor: pointer; }
+.wn-notification-bar .wn-title-overlay { flex: 0 1 auto; max-width: 104px; min-width: 0; transition: max-width 120ms; }
+/* Text shrinks on hover/focus so the minus button fits inside the container. */
+.wn-notification-bar:hover .wn-title-overlay,
+.wn-notification-bar:focus-within .wn-title-overlay,
+.wn-notification-bar.wn-ind-hover .wn-title-overlay { max-width: 82px; }
+/* Far-right minus: hidden until the bar or anywhere on the workspace
+   indicator is hovered or keyboard-focused, so it never takes space unless
+   it fits next to the shrunken text. */
+.wn-notification-bar .wn-unpin {
+  appearance: none; border: 0; border-radius: 4px; background: transparent;
+  color: inherit; opacity: .65; width: 18px; min-width: 18px; height: 18px; padding: 0;
+  display: none; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0;
+}
+.wn-notification-bar .wn-unpin .wn-ico { width: 12px; height: 12px; min-width: 12px; }
+.wn-notification-bar:hover .wn-unpin:not([hidden]),
+.wn-notification-bar:focus-within .wn-unpin:not([hidden]),
+.wn-notification-bar.wn-ind-hover .wn-unpin:not([hidden]) { display: flex; }
+.wn-notification-bar .wn-unpin:hover { background: var(--wn-hover, rgba(128, 128, 128, .2)); opacity: 1; }
+.wn-notification-bar .wn-unpin:focus-visible { outline: 2px solid AccentColor; outline-offset: 1px; }
+.wn-notification-bar .wn-unpin[hidden] { display: none; }
+
+.zen-current-workspace-indicator-icon.wn-game-icon-active { position: relative; width: 16px; min-width: 16px; height: 16px; font-size: 0 !important; background-image: none !important; }
+.zen-current-workspace-indicator-icon.wn-game-icon-active > :not(.wn-workspace-game-icon) { visibility: hidden; }
+.wn-workspace-game-icon { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; line-height: 1; background: none; }
+.wn-workspace-game-icon img { width: 16px; height: 16px; object-fit: contain; }
+.wn-workspace-game-icon svg { width: 16px; height: 16px; }
+
+.wn-notification-bar:not(:has(.wn-show)) { display: none; }
+
+/* Phone-style ongoing cards above recent alerts. */
+.wn-game-present .zen-current-workspace-indicator-name { display: none !important; }
+#wn-feed-panel .wn-section-label { font-size: 11px; font-weight: 600; color: var(--wn-muted); padding: 6px 14px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#wn-feed-panel .wn-list { padding: 0 0 4px; background: transparent; }
+/* Full-bleed flat rows: no card background or shadow, dividers only. */
+#wn-feed-panel .wn-item { border: 0; border-bottom: 1px solid var(--wn-line); border-radius: 0; background: transparent; margin: 0; padding: 8px 14px; cursor: pointer; box-shadow: none; }
+#wn-feed-panel .wn-item:hover { background: var(--wn-hover); }
+#wn-feed-panel .wn-det { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#wn-feed-panel .wn-live-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: auto; border: 1px solid color-mix(in srgb, AccentColor 35%, transparent); border-radius: var(--wn-radius); background: color-mix(in srgb, var(--wn-accent) 8%, var(--panel-background, var(--arrowpanel-background))); padding: 10px; padding-top: 12px; margin: 8px 14px; color: inherit; font: inherit; cursor: pointer; box-shadow: none; text-align: start; }
+#wn-feed-panel .wn-live-card .wn-dismiss { position: absolute; top: 4px; inset-inline-end: 4px; min-height: 20px; width: 20px; padding: 0; background: transparent; color: var(--wn-muted); box-shadow: none; display: inline-flex; align-items: center; justify-content: center; }
+#wn-feed-panel .wn-live-status { align-self: flex-start; color: AccentColor; font-size: 10px; font-weight: 650; }
+#wn-feed-panel .wn-live-card .wn-match-caption { margin: 0; text-align: start; }
+/* Sources overview and focused add/advanced views. Floating rows: the row
+   itself is transparent (no container box); info text sits directly on the
+   panel while switches and menu buttons float as their own pills. */
+.wn-source-content { padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 6px; background: transparent; }
+.wn-source-content > .wn-btn { align-self: flex-start; }
+.wn-source-content .wn-section-label { margin: 8px 0 2px; padding: 0; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-source-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 4px; border-radius: 0; border-bottom: 1px solid var(--wn-line); background: transparent; }
+.wn-source-info { flex: 1 1 150px; min-width: 0; overflow-wrap: break-word; }
+.wn-source-info .wn-conn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-source-info .wn-conn-sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; }
+.wn-source-controls { display: contents; }
+.wn-source-controls > [role="switch"] { flex: 0 0 auto; }
+.wn-source-logo { width: 28px; height: 28px; object-fit: contain; flex-shrink: 0; }
+.wn-source-status { font-size: 11px; opacity: .75; line-height: 1.5; }
+#wn-feed-panel.wn-wide { width: 440px; }
+/* Icon-rail shell: narrow sidebar, flexible main column. */
+#wn-feed-panel .wn-source-shell { display: flex; align-items: stretch; height: min(520px, calc(100vh - 100px)); min-height: 0; overflow: hidden; }
+#wn-feed-panel .wn-wrap:has(.wn-source-shell) { overflow: hidden; }
+.wn-side { width: 52px; min-width: 52px; flex-shrink: 0; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; border-inline-end: 1px solid var(--wn-line); }
+.wn-side-btn { flex-shrink: 0; appearance: none; border: 1px solid transparent; border-radius: var(--wn-radius); background: transparent; color: var(--wn-muted); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.wn-side-btn .wn-ico { width: 18px; height: 18px; min-width: 18px; }
+.wn-side-btn:hover { background: var(--wn-hover); color: inherit; }
+.wn-side-btn.wn-on { background: color-mix(in srgb, var(--wn-accent) 14%, transparent); color: inherit; border-color: color-mix(in srgb, var(--wn-accent) 30%, transparent); }
+.wn-side-btn:focus-visible { outline: 2px solid AccentColor; outline-offset: 1px; }
+.wn-side-spacer { flex: 1; }
+.wn-side-add { border: 1px solid var(--wn-line); font-size: 18px; color: inherit; }
+.wn-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.wn-main-top { padding: 14px 14px 12px; border-bottom: 1px solid var(--wn-line); flex-shrink: 0; }
+.wn-main-titlerow { display: flex; align-items: flex-start; gap: 8px; }
+.wn-main-head { flex: 1; min-width: 0; }
+.wn-main-title { font-size: 14px; font-weight: 600; margin: 0; outline: none; }
+.wn-main-sub { color: var(--wn-muted); font-size: 11px; margin: 3px 0 0; line-height: 1.45; }
+.wn-main-close { appearance: none; border: 0; border-radius: 7px; background: var(--wn-hover); color: inherit; width: 26px; height: 26px; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.wn-main-close .wn-ico { width: 12px; height: 12px; min-width: 12px; }
+.wn-main-close:hover { filter: brightness(1.1); }
+.wn-main-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.wn-section-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
+.wn-section-row .wn-section-label { flex: 1; margin: 0; padding: 0; }
+.wn-link-btn { background: transparent !important; box-shadow: none !important; color: var(--wn-muted) !important; display: inline-flex !important; align-items: center; gap: 2px; }
+.wn-link-btn .wn-ico { width: 13px; height: 13px; min-width: 13px; }
+.wn-back { display: inline-flex !important; align-items: center; gap: 6px; }
+.wn-back .wn-ico { width: 13px; height: 13px; min-width: 13px; }
+/* Connected-app / team cards with status dot, switch and chevron. */
+.wn-app-card { display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-radius: var(--wn-radius); background: transparent; }
+.wn-app-card:not(button) { border-bottom: 1px solid var(--wn-line); border-radius: 0; }
+button.wn-app-card { width: 100%; border: 0; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+button.wn-app-card:hover { background: var(--wn-hover); }
+.wn-app-iconwrap { width: 30px; height: 30px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.wn-app-card .wn-app-icon { width: 30px; height: 30px; }
+.wn-app-iconwrap.wn-large { width: 40px; height: 40px; }
+.wn-app-iconwrap.wn-large .wn-app-icon { width: 40px; height: 40px; }
+.wn-team-logo-img { width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; border-radius: 7px; }
+.wn-platform-tile { width: 30px; height: 30px; flex-shrink: 0; border-radius: var(--wn-radius); background: var(--wn-hover); color: inherit; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.wn-app-meta { flex: 1; min-width: 0; }
+.wn-app-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-app-sub { color: var(--wn-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.wn-app-status { display: flex; align-items: center; gap: 0; color: var(--wn-muted); font-size: 11px; margin-top: 3px; min-width: 0; }
+.wn-app-status > span:last-child { flex: 1; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.wn-dot { width: 7px; height: 7px; min-width: 7px; border-radius: 50%; background: color-mix(in srgb, currentColor 35%, transparent); margin-inline-end: 6px; }
+.wn-dot.on { background: var(--wn-accent); }
+.wn-chev { appearance: none; border: 0; background: transparent; color: var(--wn-muted); padding: 4px 2px; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.wn-chev .wn-ico { width: 14px; height: 14px; min-width: 14px; }
+.wn-chev:hover { color: inherit; }
+.wn-chev-static { display: inline-flex; align-items: center; color: var(--wn-muted); flex-shrink: 0; }
+.wn-chev-static .wn-ico { width: 14px; height: 14px; min-width: 14px; }
+/* Top-right corner icon buttons on team cards (open + following check). */
+.wn-app-card.wn-has-corner { position: relative; }
+.wn-app-card.wn-has-corner .wn-app-meta { padding-inline-end: 46px; }
+.wn-card-corner { position: absolute; top: 5px; inset-inline-end: 5px; display: flex; gap: 2px; }
+.wn-icon-btn { appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--wn-muted); width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.wn-icon-btn:hover:not(:disabled) { background: var(--wn-hover); color: inherit; }
+.wn-icon-btn:disabled { opacity: .55; cursor: default; }
+.wn-icon-btn:focus-visible { outline: 2px solid var(--zen-primary-color, #008bea); outline-offset: 1px; }
+.wn-icon-btn .wn-ico { width: 14px; height: 14px; min-width: 14px; }
+.wn-icon-btn.wn-is-on { color: AccentColor; }
+/* Compact native-style monitoring switches (role=switch keeps its accessible name). */
+#wn-feed-panel .wn-btn[role="switch"] { width: 40px; min-width: 40px; height: 22px; min-height: 22px; padding: 0; border-radius: 11px; font-size: 0; position: relative; flex-shrink: 0; background: color-mix(in srgb, currentColor 20%, transparent); box-shadow: none; }
+#wn-feed-panel .wn-btn[role="switch"]::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 120ms; box-shadow: 0 1px 2px rgb(0 0 0 / 30%); }
+#wn-feed-panel .wn-btn[role="switch"].wn-on { background: AccentColor; border-color: transparent; }
+#wn-feed-panel .wn-btn[role="switch"].wn-on::after { transform: translateX(18px); }
+[dir="rtl"] #wn-feed-panel .wn-btn[role="switch"].wn-on::after { transform: translateX(-18px); }
+/* Detail view. */
+.wn-detail-hero { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.wn-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.wn-detail-line { color: var(--wn-muted); font-size: 11px; overflow-wrap: anywhere; }
+.wn-ical-row { display: flex; gap: 6px; align-items: center; }
+.wn-ical-row .wn-search { flex: 1; min-width: 0; }
+.wn-ical-error { color: #ff9d9d; font-size: 11px; }
+.wn-main-scroll .wn-search { box-sizing: border-box; width: 100%; min-width: 0; }
+.wn-main-scroll .wn-diag { margin: 0; font-size: 10px; max-height: 220px; overflow: auto; }
+.wn-source-games { flex: 0 0 100%; min-width: 0; display: grid; gap: 6px; background: transparent; }
+.wn-score-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 6px; border-top: 1px solid var(--wn-line); text-align: start; background: transparent; }
+.wn-score-card .wn-scoreboard { gap: 12px; }
+.wn-score-card .wn-team-logo { width: 32px; height: 32px; }
+.wn-score-card .wn-score-line { font-size: 19px; }
+.wn-score-card .wn-match-caption { text-align: start; margin: 0; overflow-wrap: normal; }
+#wn-feed-panel .wn-live-card .wn-scoreboard { gap: 12px; }
+#wn-feed-panel .wn-live-card .wn-team-logo { width: 28px; height: 28px; }
+#wn-feed-panel .wn-live-card .wn-score-line { font-size: 17px; }
+.wn-score-status { color: var(--wn-muted); font-size: 11px; }
+.wn-score-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+.wn-app-icon { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; vertical-align: middle; }
+/* Native Zen icons as currentColor masks (verified in omni.ja) — no text or
+   emoji glyph is ever used as an icon. */
+.wn-ico { width: 16px; height: 16px; min-width: 16px; display: inline-block; flex-shrink: 0; background: currentColor; -webkit-mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; mask-position: center; mask-size: contain; mask-repeat: no-repeat; }
+.wn-ico-inbox { -webkit-mask-image: url("chrome://browser/skin/zen-icons/selectable/inbox.svg"); mask-image: url("chrome://browser/skin/zen-icons/selectable/inbox.svg"); }
+.wn-ico-apps { -webkit-mask-image: url("chrome://browser/skin/zen-icons/selectable/grid-2x2.svg"); mask-image: url("chrome://browser/skin/zen-icons/selectable/grid-2x2.svg"); }
+.wn-ico-teams { -webkit-mask-image: url("chrome://browser/skin/zen-icons/selectable/people.svg"); mask-image: url("chrome://browser/skin/zen-icons/selectable/people.svg"); }
+.wn-ico-settings { -webkit-mask-image: url("chrome://browser/skin/zen-icons/settings.svg"); mask-image: url("chrome://browser/skin/zen-icons/settings.svg"); }
+.wn-ico-plus { -webkit-mask-image: url("chrome://browser/skin/zen-icons/plus.svg"); mask-image: url("chrome://browser/skin/zen-icons/plus.svg"); }
+.wn-ico-close { -webkit-mask-image: url("chrome://browser/skin/zen-icons/close.svg"); mask-image: url("chrome://browser/skin/zen-icons/close.svg"); }
+.wn-ico-chev { -webkit-mask-image: url("chrome://browser/skin/zen-icons/arrow-right.svg"); mask-image: url("chrome://browser/skin/zen-icons/arrow-right.svg"); }
+.wn-ico-back { -webkit-mask-image: url("chrome://browser/skin/zen-icons/back.svg"); mask-image: url("chrome://browser/skin/zen-icons/back.svg"); }
+.wn-ico-open { -webkit-mask-image: url("chrome://browser/skin/zen-icons/share.svg"); mask-image: url("chrome://browser/skin/zen-icons/share.svg"); }
+.wn-ico-check { -webkit-mask-image: url("chrome://browser/skin/zen-icons/selectable/checkbox.svg"); mask-image: url("chrome://browser/skin/zen-icons/selectable/checkbox.svg"); }
+.wn-ico-minus { -webkit-mask-image: url("chrome://browser/skin/zen-icons/unpin.svg"); mask-image: url("chrome://browser/skin/zen-icons/unpin.svg"); }
+.wn-svc, .wn-source-info .wn-conn-title { display: flex; align-items: center; gap: 6px; }
+.wn-leagues { display: flex; gap: 5px; }
+.wn-leagues > button { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#wn-feed-panel .wn-item-top { align-items: center; gap: 6px; }
+#wn-feed-panel .wn-item-top .wn-dismiss { min-height: 20px; width: 20px; padding: 0; background: transparent; color: var(--wn-muted); box-shadow: none; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+#wn-feed-panel .wn-dismiss .wn-ico { width: 12px; height: 12px; min-width: 12px; }
+#wn-feed-panel .wn-tab .wn-btn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-source-content .wn-search { box-sizing: border-box; width: 100%; min-width: 0; }
+.wn-source-content label { display: grid; gap: 4px; }
+.wn-team-results { display: flex; flex-direction: column; gap: 6px; }
+.wn-source-content .wn-diag { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 10px; }
+.wn-source-content button:focus-visible, .wn-side-btn:focus-visible, .wn-chev:focus-visible, .wn-app-card:focus-visible, .wn-main-close:focus-visible { outline: 2px solid var(--zen-primary-color, #008bea); outline-offset: 2px; }
+
+/* One scroll surface keeps the header and navigation visible at any window size. */
+#wn-feed-panel .wn-main-scroll > .wn-list { margin-inline: -12px; padding: 0; }
+#wn-feed-panel .wn-main-scroll > :is(.wn-hint, .wn-empty) { margin: 0; padding: 10px 2px; text-align: start; }
+#wn-feed-panel .wn-main-scroll > .wn-hint { font-size: 12px; line-height: 1.5; }
+#wn-feed-panel .wn-btn:hover:not(:disabled) { background: var(--toolbarbutton-background-color-active, color-mix(in srgb, currentColor 12%, transparent)); }
+#wn-feed-panel .wn-btn:active:not(:disabled), .wn-side-btn:active { background: var(--toolbarbutton-background-color-active, var(--wn-hover)); }
+#wn-feed-panel .wn-main-close { background: transparent; border-radius: var(--wn-radius); }
+#wn-feed-panel .wn-main-close:hover { background: var(--wn-hover); filter: none; }
+#wn-feed-panel .wn-platform-tile .wn-app-icon { width: 20px; height: 20px; }
+#wn-feed-panel [role="switch"]:dir(rtl).wn-on::after { transform: translateX(-18px); }
+@media (prefers-reduced-motion: reduce) {
+  #wn-feed-panel [role="switch"]::after, .wn-notification-bar .wn-title-overlay { transition: none; }
+}
+@media (forced-colors: active) {
+  #wn-feed-panel .wn-btn, .wn-side-btn, #wn-feed-panel .wn-live-card { border: 1px solid ButtonText; }
+  #wn-feed-panel [role="switch"]::after { background: ButtonText; }
+  #wn-feed-panel [role="switch"].wn-on, .wn-side-btn.wn-on { background: Highlight; color: HighlightText; }
+  .wn-dot.on { background: Highlight; }
+  .wn-ico { background: CanvasText; }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "workspace-notifications",
+  "name": "Workspace Notifications",
+  "description": "Shared unread mail, GitHub updates, native Calendar and messaging alerts, and followed sports teams beside the workspace menu.",
+  "author": "Workspace Notifications",
+  "version": "1.10.0",
+  "createdAt": "2026-10-02",
+  "updatedAt": "2026-10-02",
+  "homepage": "https://github.com/zen-browser/desktop",
+  "readme": "https://github.com/zen-browser/desktop",
+  "fork": [
+    "zen"
+  ],
+  "tags": [
+    "workspace",
+    "notifications",
+    "gmail",
+    "github",
+    "calendar",
+    "scores",
+    "slack",
+    "teams",
+    "discord",
+    "outlook"
+  ],
+  "style": {
+    "chrome": "chrome.css",
+    "content": ""
+  },
+  "scripts": {
+    "workspace-notifications.uc.js": {
+      "name": "Workspace Notifications",
+      "description": "Workspace title notification display, sources panel and shared store sync.",
+      "include": [
+        "chrome://browser/content/browser.xhtml"
+      ]
+    }
+  },
+  "preferences": "preferences.json",
+  "no-updates": false
+}

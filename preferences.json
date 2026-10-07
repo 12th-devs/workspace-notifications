@@ -1,0 +1,46 @@
+[
+  {
+    "type": "text",
+    "label": "Workspace Notifications",
+    "size": "18px",
+    "margin": "16px 0 2px 0"
+  },
+  {
+    "type": "text",
+    "label": "Shared unread mail, GitHub updates, desktop app alerts, Calendar reminders, and team scores.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
+    "type": "checkbox",
+    "property": "workspace-notifications.enabled",
+    "label": "Enable workspace notifications",
+    "defaultValue": true
+  },
+  {
+    "type": "checkbox",
+    "property": "workspace-notifications.debug",
+    "label": "Log [WorkspaceNotifications] diagnostics to the Browser Console",
+    "defaultValue": false
+  },
+  {
+    "type": "separator",
+    "label": "Timing"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "workspace-notifications.hover-delay-ms",
+    "label": "Hover delay before the notification panel opens (ms).",
+    "defaultValue": 250,
+    "placeholder": "250"
+  },
+  {
+    "type": "string",
+    "value": "number",
+    "property": "workspace-notifications.refresh-interval-min",
+    "label": "Background refresh interval per source in minutes (minimum 2). Reloads loaded, inactive tabs only.",
+    "defaultValue": 2,
+    "placeholder": "2"
+  }
+]
