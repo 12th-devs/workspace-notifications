@@ -316,6 +316,7 @@ button.wn-app-card:hover { background: var(--wn-hover); }
 .wn-source-content button:focus-visible, .wn-side-btn:focus-visible, .wn-chev:focus-visible, .wn-app-card:focus-visible, .wn-main-close:focus-visible { outline: 2px solid var(--zen-primary-color, #008bea); outline-offset: 2px; }
 
 /* One scroll surface keeps the header and navigation visible at any window size. */
+#wn-feed-panel .wn-inbox-actions { display: flex; justify-content: flex-end; padding: 2px 0 6px; }
 #wn-feed-panel .wn-main-scroll > .wn-list { margin-inline: -12px; padding: 0; }
 #wn-feed-panel .wn-main-scroll > :is(.wn-hint, .wn-empty) { margin: 0; padding: 10px 2px; text-align: start; }
 #wn-feed-panel .wn-main-scroll > .wn-hint { font-size: 12px; line-height: 1.5; }

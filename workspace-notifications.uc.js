@@ -1539,6 +1539,22 @@
     if (!quiet) { broadcast(window); renderAll(); }
   }
 
+  function clearAllNotifications() {
+    for (const n of store.notifications) {
+      if (!store.dismissIds[n.id]) dismissNotification(n.id, true);
+    }
+    // Live ESPN/manual games render as live cards even without a notification
+    // row; dismiss those too so Clear all truly empties the inbox.
+    for (const [key, g] of Object.entries(store.followedGames)) {
+      if (!g.dismissed && gameActive(g)) {
+        g.dismissed = true;
+        if (store.titleGameKey === key) store.titleGameKey = "";
+      }
+    }
+    if (store.titleGameKey && store.followedGames[store.titleGameKey]?.dismissed) store.titleGameKey = "";
+    broadcast(window); renderAll();
+  }
+
   function openNotification(n) {
     hidePanels();
     const found = findTabBySourceId(n.sourceId);
@@ -1846,6 +1862,15 @@
 
     if(sourceView==='inbox'){
       const undism = store.notifications.filter((n) => !store.dismissIds[n.id] && (n.service !== "gmail" || n.mailVerified) && (n.service !== "github" || n.githubVerified));
+      const hasLive = Object.values(store.followedGames).some(g=>!g.dismissed && gameActive(g));
+      if (undism.length || hasLive) {
+        const actions=el('div','wn-inbox-actions');
+        const clear=button('Clear all',()=>{clearAllNotifications();});
+        clear.setAttribute('data-wn-key','clear-all');
+        clear.setAttribute('aria-label','Dismiss all notifications');
+        actions.append(clear);
+        content.append(actions);
+      }
       const list=el('div','wn-list');
       buildFeedList(list, undism);
       content.append(list);
@@ -2182,6 +2207,7 @@
     followTabAsGame: (id) => followTabAsGame(id),
     followTeam, unfollowTeam,
     unpin: () => unpinFromIndicator(),
+    clearAll: () => clearAllNotifications(),
     providerStatus:()=>Sources?.diagnostics(),
     state: () => ({ followedTeams:Object.keys(store.followedTeams).length, calendarCapture:Sources?.calendarStatus(), connections: store.connections.length, notifications: store.notifications.length, games: Object.keys(store.followedGames).length }),
     diagnostics: () => diagnosticsText(),
