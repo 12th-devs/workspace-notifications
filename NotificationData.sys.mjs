@@ -67,6 +67,7 @@ export function parseGames(data, league) {
       homeIcon:home.team.logo || home.team.logos?.[0]?.href || '', awayIcon:away.team.logo || away.team.logos?.[0]?.href || '',
       homeScore:state==='pre' ? '' : home.score?.displayValue ?? home.score ?? '', awayScore:state==='pre' ? '' : away.score?.displayValue ?? away.score ?? '',
       state, completed:!!st.type?.completed, status:st.type?.shortDetail || st.type?.description || state,
+      period:Number(st.period) || 0, displayClock:String(st.displayClock || ''), statusName:String(st.type?.name || ''),
       startTs:Date.parse(e.date) || 0, sport:LEAGUES[league], url:e.links?.find(l=>l.rel?.includes('summary'))?.href || `https://www.espn.com/${league}/game/_/gameId/${e.id}`}];
   });
 }

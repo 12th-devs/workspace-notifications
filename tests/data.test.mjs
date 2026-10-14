@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {mailDate,notificationTime,compareNotifications,parseGames,parseTeams,LEAGUES,parseICS} from '../NotificationData.sys.mjs';
+import {gameTransitions} from '../NotificationGameEvents.sys.mjs';
 
 test('mail dates preserve precision and roll December into previous year',()=>{
   const now=+new Date(2026,0,2,10);
@@ -73,14 +74,35 @@ for(const league of Object.keys(LEAGUES)) test(league+' adapter preserves provid
 });
 
 function harness() {
-  const window={addEventListener(){},PrivateBrowsingUtils:{isWindowPrivate:()=>false}};
+  const window={addEventListener(){},PrivateBrowsingUtils:{isWindowPrivate:()=>false},popups:[],briefs:[],promptCalls:[],transitions:gameTransitions};
   const document={readyState:'loading'};
   let source=readFileSync(new URL('../workspace-notifications.uc.js',import.meta.url),'utf8');
-  source=source.replace('  if (document.readyState === "complete") init();','  window.test={loadStore,ingestGmail,ingestGitHub,prune,serialize,handleSourceEvent,gameActive,unpinFromIndicator,currentPinnedNotification,addICalConnection}; compareNotifications=window.compare; onNewBrief=()=>{}; renderAll=()=>{};\n  if (false) init();');
+  source=source.replace('  if (document.readyState === "complete") init();','  window.test={requestAccountSignin,clearAccountSignin,showAccountSignin,acknowledgeInbox,clearAllNotifications,dismissNotification,canClearNotification,currentScoreGame,hideGameFromWorkspace,loadStore,ingestGmail,ingestGitHub,onNewBrief,prune,serialize,handleSourceEvent,gameActive,unpinFromIndicator,currentPinnedNotification,addICalConnection}; compareNotifications=window.compare; gameTransitions=window.transitions; emitPopup=p=>window.popups.push(p); onNewBrief=n=>window.briefs.push(n); renderAll=()=>{}; renderTitle=()=>{};\n  if (false) init();');
   window.compare=compareNotifications;
-  vm.runInNewContext(source,{window,document,Services:{dirsvc:{get:()=>({path:'profile'})},prefs:{getBoolPref:(_p,d)=>d},obs:{notifyObservers(){}}},Ci:{nsIFile:{}},URL,console,setTimeout:()=>0,clearTimeout(){},IOUtils:{readUTF8:()=>Promise.resolve(JSON.stringify(window.disk)),writeUTF8:()=>Promise.resolve()},PathUtils:{join:(...s)=>s.join('/')}});
+  vm.runInNewContext(source,{window,document,Services:{prompt:{BUTTON_POS_0:1,BUTTON_TITLE_IS_STRING:127,BUTTON_POS_1:256,BUTTON_TITLE_CANCEL:2,confirmEx(...args){window.promptCalls.push(args);return 1;}},dirsvc:{get:()=>({path:'profile'})},prefs:{getBoolPref:(_p,d)=>d},obs:{notifyObservers(){}}},Ci:{nsIFile:{}},URL,console,setTimeout:()=>0,clearTimeout(){},IOUtils:{readUTF8:()=>Promise.resolve(JSON.stringify(window.disk)),writeUTF8:()=>Promise.resolve()},PathUtils:{join:(...s)=>s.join('/')}});
   return {t:window.test,store:window.WorkspaceNotifications.store,window};
 }
+test('ESPN popups deduplicate both followed teams, ignore clock ticks, and survive stored snapshots',()=>{
+  const {t,store,window}=harness();store.followedTeams={'espn:nfl:23':{id:'23',league:'nfl'},'espn:nfl:5':{id:'5',league:'nfl'}};
+  const game={...parseGames({events:[event('popup')]},'nfl')[0],period:1,status:'Q1 10:00',displayClock:'10:00'};
+  t.handleSourceEvent({type:'game',game});t.handleSourceEvent({type:'game',game});assert.equal(window.popups.length,1);
+  const scored={...game,homeScore:'28'};t.handleSourceEvent({type:'game',game:scored});assert.equal(window.popups.length,2);assert.match(window.popups[1].title,/CLE scores.*28/);
+  t.handleSourceEvent({type:'game',game:{...scored,status:'Q1 9:59',displayClock:'9:59'}});assert.equal(window.popups.length,2);
+  const second={...scored,period:2,status:'Q2 15:00',displayClock:'15:00'};t.handleSourceEvent({type:'game',game:second});assert.match(window.popups.at(-1).title,/Quarter 1 ended.*Quarter 2 started/);
+  store.followedGames=JSON.parse(JSON.stringify(t.serialize().followedGames));t.handleSourceEvent({type:'game',game:second});assert.equal(window.popups.length,3);
+  store.followedGames[game.id].dismissed=true;t.handleSourceEvent({type:'game',game:{...second,homeScore:'35'}});assert.equal(window.popups.length,3);
+});
+test('retired Google connections are removed on restore while ESPN teams remain',async()=>{
+  const {t,store,window}=harness();window.disk={v:2,connections:[{id:'google',service:'scores',url:'https://www.google.com/search?q=game'}],notifications:[{id:'tab-game',sourceId:'google',service:'scores',summary:'Old game',ts:Date.now()}],followedTeams:{team:{id:'1',league:'nfl'}},followedGames:{old:{sourceId:'google'},espn:{provider:'espn',league:'nfl',teamIds:['1']}}};
+  t.loadStore();await new Promise(r=>setImmediate(r));assert.equal(store.connections.length,0);assert.equal(store.notifications.length,0);assert.equal(store.followedGames.old,undefined);assert.ok(store.followedGames.espn);assert.ok(store.followedTeams.team);
+});
+
+test('notification popup title and destination are readable and paused/dismissed arrivals are invalid',()=>{
+  const {t,store,window}=harness();const conn={id:'mail',service:'gmail',label:'reader@example.com'};store.connections=[conn];
+  const n={id:'new',sourceId:'mail',service:'gmail',summary:'A new message',account:'Account 1'};store.notifications=[n];
+  t.onNewBrief(n);assert.equal(window.popups[0].title,'New Mail Notification');assert.equal(window.popups[0].destination,undefined);assert.equal(window.popups[0].isCurrent(),true);
+  conn.paused=true;assert.equal(window.popups[0].isCurrent(),false);conn.paused=false;store.dismissIds[n.id]=Date.now();assert.equal(window.popups[0].isCurrent(),false);
+});
 test('restore preserves full timestamps and new native app connections',async()=>{
   const {t,store,window}=harness(),now=Date.now();
   window.disk={v:2,connections:[{id:'slack',service:'slack',url:'https://app.slack.com',lastOkTs:now,lastScanTs:now,lastAlertAt:now}],notifications:[]};
@@ -178,4 +200,82 @@ test('v1 migration preserves connections and manual games, clears synthetic Cale
   const saved=t.serialize();assert.equal(saved.v,2);assert.equal(saved.followedTeams['espn:nfl:23'].paused,true);assert.equal(saved.connections[0].baseline[0],'thread');
   window.disk={...saved,notifications:[{...saved.notifications[0],ts:0,mailTimeKnown:false,mailDate:'Unknown date'}]};
   t.loadStore();await new Promise(resolve=>setImmediate(resolve));assert.equal(store.notifications[0].ts,0);
+});
+
+
+test('team directory preloads without visiting Teams and renders on first arrival',async()=>{
+  const source=readFileSync(new URL('../workspace-notifications.uc.js',import.meta.url),'utf8');
+  const loader=source.match(/  async function loadTeamPicker\(\) \{[\s\S]*?\n  \}/)[0];
+  const context={pickerGeneration:0,pickerLeague:'nfl',pickerStatus:'',pickerTeams:[],sourceView:'inbox',renders:0,Sources:{teams:async()=>[{id:'1',name:'Team'}]}};
+  context.renderSourcesPanel=()=>context.renders++;
+  vm.createContext(context);vm.runInContext(loader,context);
+  await context.loadTeamPicker();assert.equal(context.pickerTeams[0].name,'Team');assert.equal(context.pickerStatus,'');
+  context.sourceView='teams';await context.loadTeamPicker();assert.equal(context.renders,3);
+  const init=source.slice(source.indexOf('  function init()'));
+  assert.match(init,/void loadTeamPicker\(\);/);
+});
+
+
+test('clear all preserves live games and active reminders while clearing ordinary alerts',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'1',league:'nfl'}};
+  store.followedGames={live:{provider:'espn',state:'in',league:'nfl',teamIds:['1'],showInTitle:true}};store.titleGameKey='live';
+  const reminder={id:'reminder',service:'calendar',summary:'Active',nativeActive:true,ts:Date.now()};
+  const game={id:'game',service:'scores',kind:'game',game:{key:'live'},summary:'Game',ts:Date.now()};
+  const alert={id:'alert',service:'slack',summary:'Message',ts:Date.now()};store.notifications=[reminder,game,alert];
+  assert.equal(t.canClearNotification(reminder),false);assert.equal(t.canClearNotification(game),false);assert.equal(t.canClearNotification(alert),true);
+  assert.equal(t.dismissNotification('reminder'),false);assert.equal(t.dismissNotification('game'),false);
+  t.clearAllNotifications();assert.deepEqual(store.notifications.map(n=>n.id),['reminder','game']);assert.equal(store.followedGames.live.dismissed,undefined);assert.equal(store.titleGameKey,'live');
+  assert.equal(store.notifications.some(t.canClearNotification),false);
+  reminder.nativeActive=false;store.followedGames.live.state='post';assert.equal(t.canClearNotification(reminder),true);assert.equal(t.canClearNotification(game),true);
+});
+
+test('hiding a live score removes only the workspace title and survives later score updates',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'1',league:'nfl'}};
+  const game={provider:'espn',state:'in',league:'nfl',teamIds:['1'],showInTitle:true};store.followedGames={live:game};store.titleGameKey='live';
+  assert.equal(t.currentScoreGame().key,'live');assert.equal(t.unpinFromIndicator(),false);assert.equal(t.currentScoreGame().key,'live');t.hideGameFromWorkspace('live');assert.equal(t.currentScoreGame(),null);assert.equal(game.dismissed,undefined);
+  game.homeScore='7';store.titleGameKey='live';assert.equal(t.currentScoreGame(),null);assert.equal(store.followedGames.live,game);
+});
+
+
+test('new notifications preserve the live score title and set a dot until Inbox opens',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'1',league:'nfl'}};store.followedGames={live:{provider:'espn',state:'in',league:'nfl',teamIds:['1']}};
+  const n={id:'new',service:'github',summary:'Update',githubVerified:true,ts:Date.now()};store.notifications=[n];
+  t.onNewBrief(n);assert.equal(t.currentPinnedNotification(),null);assert.equal(t.currentScoreGame().key,'live');assert.equal(store.inboxPending,true);assert.equal(t.serialize().inboxPending,true);
+  t.acknowledgeInbox();assert.equal(store.inboxPending,false);assert.equal(store.notifications[0],n);assert.equal(t.currentScoreGame().key,'live');
+});
+
+test('an active calendar title keeps priority over newer ordinary notifications',()=>{
+  const {t,store}=harness();store.connections=[{id:'calendar',service:'calendar'}];
+  const reminder={id:'reminder',sourceId:'calendar',service:'calendar',nativeActive:true,summary:'Meeting',ts:Date.now()-1000};
+  const incoming={id:'new',service:'slack',summary:'Message',ts:Date.now()};store.notifications=[incoming,reminder];
+  t.onNewBrief(incoming);assert.equal(t.currentPinnedNotification(),reminder);assert.equal(t.unpinFromIndicator(),false);assert.equal(store.inboxPending,true);
+  t.acknowledgeInbox();assert.equal(store.inboxPending,false);assert.equal(t.currentPinnedNotification(),reminder);
+});
+
+
+for(const service of ['gmail','github']){
+  const item=(fp='first')=>({id:service==='gmail'?'gmail:atom:message':'github:thread:message',summary:'Message',detail:'Details',url:'https://example.com/item',ts:Date.now(),fingerprint:fp,meta:{unread:true}});
+  const ingest=(t,c,items,meta={})=>service==='gmail'?t.ingestGmail(c,items,'Account',false,meta):t.ingestGitHub(c,items,false,meta);
+  test(service+' played notifications survive restart and baseline resets',async()=>{
+    const h=harness(),c={id:'account',service,baseline:new Set(),baselineFp:{}};h.store.connections=[c];const n=item();ingest(h.t,c,[n]);assert.equal(h.window.briefs.length,1);
+    const restored=harness();restored.window.disk=h.t.serialize();restored.t.loadStore();await new Promise(r=>setImmediate(r));const saved=restored.store.connections[0];saved.baseline=new Set();saved.baselineFp={};
+    ingest(restored.t,saved,[n]);assert.equal(restored.window.briefs.length,0);assert.deepEqual(Array.from(saved.playedNotifications[n.id]),['first']);
+    ingest(restored.t,saved,[item('reply')]);assert.equal(restored.window.briefs.length,1);
+    ingest(restored.t,saved,[n]);assert.equal(restored.window.briefs.length,1);
+  });
+  test(service+' removes played entries after inbox removal but preserves partial-scan entries',()=>{
+    const h=harness(),c={id:'account',service,baseline:new Set(),baselineFp:{}};h.store.connections=[c];const n=item();ingest(h.t,c,[n]);
+    ingest(h.t,c,[],{completeInbox:false});assert.ok(c.playedNotifications[n.id]);ingest(h.t,c,[n]);assert.equal(h.window.briefs.length,1);
+    ingest(h.t,c,[],{completeInbox:true});assert.equal(c.playedNotifications[n.id],undefined);
+    ingest(h.t,c,[n]);assert.equal(h.window.briefs.length,2);
+    const other={id:'other',service,baseline:new Set(),baselineFp:{}};ingest(h.t,other,[n]);assert.equal(h.window.briefs.length,3);
+  });
+}
+
+
+test('sign-in failures notify once per account and opening uses the native dialog',()=>{
+  const {t,store,window}=harness(),conn={id:'mail',service:'gmail',url:'https://mail.google.com/mail/u/1/',containerId:2};store.connections=[conn];
+  t.requestAccountSignin(conn);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);assert.equal(window.briefs.length,1);assert.equal(store.notifications[0].kind,'auth');
+  t.showAccountSignin(store.notifications[0]);assert.equal(window.promptCalls.length,1);assert.equal(window.promptCalls[0][1],'Sign in to Mail');assert.equal(window.promptCalls[0][4],'Open sign-in page');
+  store.dismissIds['auth:mail']=Date.now();t.clearAccountSignin(conn);assert.equal(store.notifications.length,0);assert.equal(store.dismissIds['auth:mail'],undefined);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);
 });

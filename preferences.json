@@ -19,6 +19,12 @@
   },
   {
     "type": "checkbox",
+    "property": "workspace-notifications.popups.enabled",
+    "label": "Show notification popups for new notifications, scoring and game periods",
+    "defaultValue": true
+  },
+  {
+    "type": "checkbox",
     "property": "workspace-notifications.debug",
     "label": "Log [WorkspaceNotifications] diagnostics to the Browser Console",
     "defaultValue": false

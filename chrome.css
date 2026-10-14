@@ -1,4 +1,15 @@
 /* Workspace Notifications: native workspace typography and one anchored popup. */
+/* Zen owns the toast's placement, background, corners, shadow and animation. */
+#zen-toast-container .zen-toast.wn-toast {
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  max-height: none;
+  height: auto;
+  gap: 10px;
+}
+.wn-toast-content { flex: 1; min-width: 0; cursor: pointer; border-radius: 4px; }
+.wn-toast-title { font: menu; font-size: 13px; font-weight: 600; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.wn-toast-content:focus-visible, #zen-toast-container .wn-toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .wn-title-overlay {
   position: static;
   display: none;
@@ -21,8 +32,13 @@
   --wn-line: var(--panel-separator-color, light-dark(rgb(0 0 0 / 9%), rgb(255 255 255 / 10%)));
   --wn-radius: var(--toolbarbutton-border-radius, 6px);
   --wn-accent: var(--zen-primary-color, AccentColor);
-  --wn-muted: light-dark(#66666d, #b3b3bc);
-  --wn-hover: var(--toolbarbutton-background-color-hover, light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 7%)));
+  --wn-muted: var(--text-color-deemphasized, light-dark(#66666d, #b3b3bc));
+  --wn-hover: var(--panel-item-hover-bgcolor, var(--toolbarbutton-background-color-hover));
+  --wn-active: var(--panel-item-active-bgcolor, var(--toolbarbutton-background-color-active, var(--wn-hover)));
+  --wn-card-bg: var(--button-background-color, var(--zen-colors-tertiary, var(--arrowpanel-background)));
+  --wn-card-border: var(--button-border-color, var(--zen-colors-border, var(--wn-line)));
+  --wn-button-hover: var(--button-background-color-hover, var(--wn-hover));
+  --wn-button-active: var(--button-background-color-active, var(--wn-active));
   width: 360px;
   max-width: calc(100vw - 24px);
   color: var(--panel-color);
@@ -110,7 +126,7 @@
 .wn-game { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--wn-line); }
 .wn-game-label { width: 100%; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.5; overflow-wrap: anywhere; }
 .wn-search-row { display: flex; gap: 8px; padding: 4px 16px 16px; }
-#wn-feed-panel .wn-search { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--wn-line); border-radius: 7px; background: var(--toolbar-field-background-color); color: inherit; font: inherit; }
+#wn-feed-panel .wn-search { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--wn-line); border-radius: 7px; background: var(--zen-colors-input-bg, var(--toolbar-field-background-color)); color: inherit; font: inherit; }
 .wn-more { margin-top: 12px; color: var(--wn-muted); font-size: 11px; }
 .wn-more > summary { cursor: pointer; width: fit-content; padding: 4px 0; border-radius: 3px; }
 .wn-more > .wn-conn-btns { color: var(--panel-color); }
@@ -128,12 +144,17 @@
 .wn-team-logo { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; }
 .wn-team-logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .wn-team-initials { border-radius: 50%; background: color-mix(in srgb, currentColor 10%, transparent); font-size: 8px; font-weight: 600; }
-.wn-score-line { font-size: 15px; font-weight: 700; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.wn-score-line { display: flex; align-self: stretch; justify-content: space-between; gap: 12px; font-size: 15px; font-weight: 700; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.wn-score-pregame { justify-content: center; }
+.wn-score-center { display: flex; flex-direction: column; align-items: center; min-width: 0; gap: 3px; }
+.wn-score-info { font-size: 9px; font-weight: 400; line-height: 1.2; color: var(--wn-muted, currentColor); opacity: .8; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .wn-title-overlay.wn-score { background: transparent; overflow: visible; }
 .wn-title-text:has(.wn-scoreboard) { display: flex; align-items: center; justify-content: flex-start; overflow: visible; }
 .wn-title-text .wn-scoreboard { width: auto; max-width: 100px; gap: 6px; }
 .wn-title-text .wn-team-logo { width: 16px; height: 16px; }
 .wn-title-text .wn-score-line { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.wn-title-text .wn-score-center { gap: 1px; }
+.wn-title-text .wn-score-info { font-size: 8px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .wn-match-caption { display: block; color: var(--wn-muted); font-size: 11px; font-weight: 400; margin-top: 7px; }
 #wn-feed-panel .wn-sum .wn-match-caption { margin-top: 6px; text-align: start; }
 .wn-game-label { padding: 4px 0; }
@@ -182,7 +203,7 @@
 #wn-feed-panel .wn-item { border: 0; border-bottom: 1px solid var(--wn-line); border-radius: 0; background: transparent; margin: 0; padding: 8px 14px; cursor: pointer; box-shadow: none; }
 #wn-feed-panel .wn-item:hover { background: var(--wn-hover); }
 #wn-feed-panel .wn-det { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-#wn-feed-panel .wn-live-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: auto; border: 1px solid color-mix(in srgb, AccentColor 35%, transparent); border-radius: var(--wn-radius); background: color-mix(in srgb, var(--wn-accent) 8%, var(--panel-background, var(--arrowpanel-background))); padding: 10px; padding-top: 12px; margin: 8px 14px; color: inherit; font: inherit; cursor: pointer; box-shadow: none; text-align: start; }
+#wn-feed-panel .wn-live-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: auto; border: 1px solid var(--wn-card-border); border-radius: var(--wn-radius); background: var(--wn-card-bg); padding: 10px; padding-top: 12px; margin: 8px 14px; color: inherit; font: inherit; cursor: pointer; box-shadow: none; text-align: start; }
 #wn-feed-panel .wn-live-card .wn-dismiss { position: absolute; top: 4px; inset-inline-end: 4px; min-height: 20px; width: 20px; padding: 0; background: transparent; color: var(--wn-muted); box-shadow: none; display: inline-flex; align-items: center; justify-content: center; }
 #wn-feed-panel .wn-live-status { align-self: flex-start; color: AccentColor; font-size: 10px; font-weight: 650; }
 #wn-feed-panel .wn-live-card .wn-match-caption { margin: 0; text-align: start; }
@@ -233,11 +254,33 @@
 .wn-app-card:not(button) { border-bottom: 1px solid var(--wn-line); border-radius: 0; }
 button.wn-app-card { width: 100%; border: 0; color: inherit; font: inherit; text-align: start; cursor: pointer; }
 button.wn-app-card:hover { background: var(--wn-hover); }
+/* Apps use a single, compact card surface with a recessed icon tile. */
+.wn-apps-view .wn-main-title { font-size: 16px; }
+.wn-apps-view .wn-main-scroll { gap: 5px; }
+.wn-apps-view .wn-section-row { margin-block: 8px 2px; }
+.wn-apps-view .wn-app-card.wn-platform,
+.wn-apps-view .wn-app-card.wn-connected-app { box-sizing: border-box; border: 1px solid var(--wn-line); border-radius: 12px; background: var(--wn-card-bg); padding: 6px 10px; gap: 12px; flex-shrink: 0; }
+.wn-apps-view .wn-app-card.wn-platform { min-height: 52px; }
+.wn-apps-view button.wn-platform:hover { background: var(--wn-hover); border-color: var(--wn-card-border); }
+.wn-apps-view button.wn-platform:active { background: var(--wn-active); }
+.wn-apps-view :is(.wn-platform-tile, .wn-app-iconwrap) { width: 38px; height: 38px; border-radius: 9px; background: var(--wn-hover); }
+#wn-feed-panel .wn-apps-view :is(.wn-platform-tile, .wn-app-iconwrap) .wn-app-icon { width: 28px; height: 28px; }
+.wn-apps-view :is(.wn-platform, .wn-connected-app) .wn-app-name { font-size: 13px; line-height: 1.3; }
+.wn-apps-view .wn-platform .wn-app-sub { font-size: 10px; line-height: 1.35; margin-top: 1px; }
+.wn-apps-view .wn-platform .wn-chev-static { margin-inline-start: 4px; }
 .wn-app-iconwrap { width: 30px; height: 30px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
 .wn-app-card .wn-app-icon { width: 30px; height: 30px; }
 .wn-app-iconwrap.wn-large { width: 40px; height: 40px; }
 .wn-app-iconwrap.wn-large .wn-app-icon { width: 40px; height: 40px; }
 .wn-team-logo-img { width: 30px; height: 30px; object-fit: contain; flex-shrink: 0; border-radius: 7px; }
+.wn-app-card.wn-followed-team { gap: 12px; }
+.wn-followed-logo { width: 38px; height: 38px; border-radius: 9px; background: var(--wn-hover); flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: var(--wn-muted); }
+.wn-followed-logo .wn-team-logo-img { width: 28px; height: 28px; border-radius: 0; }
+.wn-followed-team .wn-app-name { font-size: 13px; line-height: 1.3; }
+.wn-followed-team .wn-app-sub { margin-top: 1px; }
+.wn-followed-team .wn-team-next { gap: 5px; font-size: 10px; line-height: 1.35; margin-top: 3px; }
+.wn-followed-team .wn-team-next > svg.wn-app-icon { width: 12px; height: 12px; min-width: 12px; flex-shrink: 0; }
+.wn-followed-team .wn-chev { padding: 6px 2px; }
 .wn-platform-tile { width: 30px; height: 30px; flex-shrink: 0; border-radius: var(--wn-radius); background: var(--wn-hover); color: inherit; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
 .wn-app-meta { flex: 1; min-width: 0; }
 .wn-app-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -262,9 +305,9 @@ button.wn-app-card:hover { background: var(--wn-hover); }
 .wn-icon-btn .wn-ico { width: 14px; height: 14px; min-width: 14px; }
 .wn-icon-btn.wn-is-on { color: AccentColor; }
 /* Compact native-style monitoring switches (role=switch keeps its accessible name). */
-#wn-feed-panel .wn-btn[role="switch"] { width: 40px; min-width: 40px; height: 22px; min-height: 22px; padding: 0; border-radius: 11px; font-size: 0; position: relative; flex-shrink: 0; background: color-mix(in srgb, currentColor 20%, transparent); box-shadow: none; }
-#wn-feed-panel .wn-btn[role="switch"]::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 120ms; box-shadow: 0 1px 2px rgb(0 0 0 / 30%); }
-#wn-feed-panel .wn-btn[role="switch"].wn-on { background: AccentColor; border-color: transparent; }
+#wn-feed-panel .wn-btn[role="switch"] { width: 40px; min-width: 40px; height: 22px; min-height: 22px; padding: 0; border-radius: 11px; font-size: 0; position: relative; flex-shrink: 0; background: var(--toggle-background-color, var(--button-background-color, var(--wn-hover))); box-shadow: none; }
+#wn-feed-panel .wn-btn[role="switch"]::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--toggle-dot-background-color, #fff); transition: transform 120ms; box-shadow: 0 1px 2px rgb(0 0 0 / 30%); }
+#wn-feed-panel .wn-btn[role="switch"].wn-on { background: var(--toggle-background-color-pressed, var(--zen-accent-button-background, AccentColor)); border-color: transparent; }
 #wn-feed-panel .wn-btn[role="switch"].wn-on::after { transform: translateX(18px); }
 [dir="rtl"] #wn-feed-panel .wn-btn[role="switch"].wn-on::after { transform: translateX(-18px); }
 /* Detail view. */
@@ -320,8 +363,8 @@ button.wn-app-card:hover { background: var(--wn-hover); }
 #wn-feed-panel .wn-main-scroll > .wn-list { margin-inline: -12px; padding: 0; }
 #wn-feed-panel .wn-main-scroll > :is(.wn-hint, .wn-empty) { margin: 0; padding: 10px 2px; text-align: start; }
 #wn-feed-panel .wn-main-scroll > .wn-hint { font-size: 12px; line-height: 1.5; }
-#wn-feed-panel .wn-btn:hover:not(:disabled) { background: var(--toolbarbutton-background-color-active, color-mix(in srgb, currentColor 12%, transparent)); }
-#wn-feed-panel .wn-btn:active:not(:disabled), .wn-side-btn:active { background: var(--toolbarbutton-background-color-active, var(--wn-hover)); }
+#wn-feed-panel .wn-btn:hover:not(:disabled) { background: var(--wn-button-hover); }
+#wn-feed-panel .wn-btn:active:not(:disabled), .wn-side-btn:active { background: var(--wn-active); }
 #wn-feed-panel .wn-main-close { background: transparent; border-radius: var(--wn-radius); }
 #wn-feed-panel .wn-main-close:hover { background: var(--wn-hover); filter: none; }
 #wn-feed-panel .wn-platform-tile .wn-app-icon { width: 20px; height: 20px; }
@@ -336,3 +379,38 @@ button.wn-app-card:hover { background: var(--wn-hover); }
   .wn-dot.on { background: Highlight; }
   .wn-ico { background: CanvasText; }
 }
+
+.wn-followed-team .wn-team-next > span:last-child { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.zen-current-workspace-indicator > .wn-pending-dot { position: absolute; top: 0; right: 0; width: 6px; height: 6px; border-radius: 50%; background: AccentColor; pointer-events: none; }
+.wn-pending-dot[hidden] { display: none; }
+
+/* Scope card surfaces above browser button defaults, including appearance. */
+#wn-feed-panel .wn-platform,
+#wn-feed-panel .wn-connected-app,
+#wn-feed-panel .wn-followed-team {
+  appearance: none !important;
+  box-sizing: border-box;
+  border: 1px solid var(--wn-card-border) !important;
+  border-radius: 12px !important;
+  background: var(--wn-card-bg) !important;
+  box-shadow: none !important;
+  margin: 0;
+  padding: 7px 10px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+#wn-feed-panel button.wn-platform:hover { background: var(--wn-hover) !important; }
+#wn-feed-panel button.wn-platform:active { background: var(--wn-active) !important; }
+#wn-feed-panel :is(.wn-platform, .wn-connected-app) :is(.wn-platform-tile, .wn-app-iconwrap) { width: 38px; height: 38px; border-radius: 9px; background: var(--wn-hover); }
+#wn-feed-panel :is(.wn-platform, .wn-connected-app) .wn-app-icon { width: 28px; height: 28px; }
+#wn-feed-panel :is(.wn-platform, .wn-connected-app) .wn-app-name { font-size: 13px; line-height: 1.3; }
+
+#wn-feed-panel .wn-connected-app:hover, #wn-feed-panel .wn-followed-team:hover, #wn-feed-panel .wn-live-card:hover { background: var(--wn-hover) !important; }
+#wn-feed-panel .wn-btn:active:not(:disabled) { background: var(--wn-button-active); }
+#wn-feed-panel .wn-btn[role="switch"].wn-on:hover { background: var(--toggle-background-color-pressed-hover, var(--zen-accent-button-background, AccentColor)); }
+
+#wn-feed-panel .wn-header-back { appearance: none; border: 0; padding: 0; margin: 0; width: 28px; height: 28px; border-radius: var(--wn-radius); background: transparent; color: inherit; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+#wn-feed-panel .wn-header-back:hover { background: var(--wn-hover); }
+#wn-feed-panel .wn-header-back:active { background: var(--wn-active); }
+#wn-feed-panel .wn-header-back .wn-ico { width: 16px; height: 16px; min-width: 16px; }

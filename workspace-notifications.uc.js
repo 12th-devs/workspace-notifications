@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Workspace Notifications
 // @description    Shared notifications and live scores before the native workspace menu.
-// @version        1.10.0
+// @version        1.14.1
 // @author         Workspace Notifications
 // @namespace      https://github.com/zen-browser/desktop
 // ==/UserScript==
@@ -22,7 +22,7 @@
   const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
   const MIN_REFRESH_MS = 2 * 60 * 1000;
 
-  const SERVICE_LABEL = { gmail: "Mail", github: "GitHub", calendar: "Calendar", scores: "Scores", slack: "Slack", teams: "Microsoft Teams", discord: "Discord", outlook: "Outlook" };
+  const SERVICE_LABEL = { gmail: "Mail", github: "GitHub", calendar: "Calendar", espn: "ESPN", slack: "Slack", teams: "Microsoft Teams", discord: "Discord", outlook: "Outlook" };
   const NATIVE_SERVICES = new Set(["calendar", "slack", "teams", "discord", "outlook"]);
   let NativeApps={}, nativeServiceForURL=()=>null;
 
@@ -127,11 +127,14 @@
     unpinnedIds: {},    // id -> ts (hidden from the workspace indicator, kept in the feed)
     followedGames: {},  // matchKey -> {id, sourceId, home, away, homeScore, awayScore, status, lastUpdate, dismissed, showInTitle, finalShownTs}
     titleGameKey: "",
+    inboxPending: false,
     seq: 0,
   };
 
   let notificationTime=n=>n.ts ? new Date(n.ts).toLocaleString() : "";
   let Sources=null, detachSources=null, compareNotifications=(a,b)=>(b.ts||0)-(a.ts||0);
+  let Popups=null, gameTransitions=()=>[], gameScoreStatus=g=>g.status || '';
+  let teamReturnView="teams", accountPairing=false, sourceReturnView="apps";
   let sourceView="inbox", sourceDetailId="", pickerLeague="nfl", pickerQuery="", pickerTeams=[], pickerStatus="", pickerGeneration=0, icalUrl="", icalError="";
 
   function followTeam(team) {
@@ -168,13 +171,14 @@
       const g=event.game; if (!gameActive(g)) return;
       const prev=store.followedGames[g.id];
       store.followedGames[g.id]={...prev,...g,sourceId:g.id,lastUpdate:Date.now(),dismissed:prev?.dismissed || false};
+      announceGameChanges(prev,store.followedGames[g.id]);
       for (const t of Object.values(store.followedTeams)) if (t.league===g.league && g.teamIds.includes(t.id)) {
         t.schedule=(t.schedule || []).filter(x=>x.id!==g.id).concat(g).sort((a,b)=>a.startTs-b.startTs);
       }
       if ((g.state==='in' && !prev?.startAlerted) || (g.completed && !prev?.finalAlerted)) {
         const kind=g.completed ? 'final' : 'start';
         store.followedGames[g.id][g.completed ? 'finalAlerted' : 'startAlerted']=true;
-        const n={id:g.id+":"+kind,service:"scores",sourceId:g.id,summary:scoreText(g),detail:g.status,url:g.url,ts:Date.now(),seen:!prev && g.completed,kind:"game",game:{...scoreSnapshot(g),key:g.id,final:g.completed}};
+        const n={id:g.id+":"+kind,service:"espn",sourceId:g.id,summary:scoreText(g),detail:g.status,url:g.url,ts:Date.now(),seen:!prev && g.completed,kind:"game",game:{...scoreSnapshot(g),key:g.id,final:g.completed}};
         if (!prev && g.completed) pushQuiet(n); else pushNotification(n);
       }
       changed=true;
@@ -221,6 +225,7 @@
     return svg;
   }
   function appIcon(source) {
+    if(source.service==='espn' || source.game?.provider==='espn')return appBrandIcon('espn');
     const conn=connForSourceId(source.sourceId || source.id), found=conn ? findTabBySourceId(conn.id) : null;
     if (conn?.ical) return tablerCalendarClock();
     const tab=found?.tab;
@@ -232,22 +237,52 @@
     icon.onerror=()=>{icon.hidden=true;};
     return icon;
   }
-  function ingestGitHub(conn,items,isFirst) {
+  function appBrandIcon(service) {
+    const files={gmail:'gmail.ico',github:'github.svg',calendar:'calendar.ico',slack:'slack.png',teams:'teams.ico',discord:'discord.png',outlook:'outlook.png',espn:'espn.ico'};
+    if(!files[service])return null;
+    const icon=document.createElement('img');icon.className='wn-app-icon';icon.alt='';
+    icon.src='resource://workspace-notifications/icons/'+files[service];icon.dataset.wnSrc=icon.src;
+    return icon;
+  }
+  function normalizePlayedNotifications(value) {
+    const cache=Object.create(null);
+    if(!value || typeof value!=='object' || Array.isArray(value))return cache;
+    for(const [id,stored]of Object.entries(value).slice(-1000)){
+      const revisions=(Array.isArray(stored)?stored:[stored]).filter(fp=>typeof fp==='string').slice(-8);
+      if(id && revisions.length)cache[id]=revisions;
+    }
+    return cache;
+  }
+  function inboxPlayedCache(conn,items,meta={}) {
+    const cache=conn.playedNotifications ||= normalizePlayedNotifications(conn.baselineFp);
+    const present=new Set(items.filter(i=>i?.id && i.meta?.unread!==false).map(i=>i.id));
+    if(meta.completeInbox!==false)for(const id of Object.keys(cache))if(!present.has(id))delete cache[id];
+    for(const id of meta.readIds || [])delete cache[id];
+    return cache;
+  }
+  function rememberPlayed(cache,id,fp) {
+    const revisions=Object.hasOwn(cache,id)?cache[id]:[];
+    if(!revisions.includes(fp))cache[id]=[...revisions,fp].slice(-8);
+  }
+  function ingestGitHub(conn,items,isFirst,meta={}) {
+    const played=inboxPlayedCache(conn,items,meta);
     const previous=store.notifications.filter(n=>n.service==='github' && n.sourceId===conn.id),byItem=new Map(previous.map(n=>[n.itemId,n]));
     conn.openedGithub ||= {};
     const reported=new Set(items.map(i=>i.id));
     for(const id of Object.keys(conn.openedGithub))if(!reported.has(id))delete conn.openedGithub[id];
-    const next=[];
+    const next=[],briefs=[];
     for(const item of items) {
       if(!item.id?.startsWith('github:thread:') || item.meta?.unread !== true)continue;
       const fp=String(item.fingerprint || ''),base='n-'+conn.id+'-'+item.id,id=base+'-r'+fp.slice(0,8),old=byItem.get(item.id);
+      const alreadyPlayed=Object.hasOwn(played,item.id) && played[item.id].includes(fp);rememberPlayed(played,item.id,fp);
       if(conn.openedGithub[item.id]===fp || store.dismissIds[id] || store.dismissIds[base])continue;
       const n={id,itemId:item.id,service:'github',sourceId:conn.id,account:'GitHub',summary:item.summary,detail:item.detail,url:validHttpsUrl(item.url),
         ts:item.ts || old?.ts || Date.now(),githubTimeKnown:!!item.ts,githubVerified:true,sourceRank:item.meta.sourceRank || 0,seen:old?.seen ?? isFirst,kind:'alert'};
       next.push(n);
-      if(!isFirst && (!conn.baseline.has(item.id) || conn.baselineFp[item.id]!==fp))onNewBrief(n);
+      if(!isFirst && !alreadyPlayed && (!conn.baseline.has(item.id) || conn.baselineFp[item.id]!==fp))briefs.push(n);
     }
     store.notifications=store.notifications.filter(n=>!(n.service==='github' && n.sourceId===conn.id)).concat(next);
+    for(const n of briefs)onNewBrief(n);
     conn.baseline=reported;conn.baselineFp=Object.fromEntries(items.map(i=>[i.id,String(i.fingerprint || '')]));
     return {changed:JSON.stringify(previous)!==JSON.stringify(next)};
   }
@@ -264,9 +299,9 @@
       seq: store.seq,
       followedTeams:store.followedTeams,
       connections: store.connections.map((c) => ({
-        id: c.id, service: c.service, url: c.url, label: c.label, containerId: c.containerId || 0,
+        id: c.id, service: c.service, url: c.url, label: c.label, accountLabel:c.accountLabel || "", containerId: c.containerId || 0,
         paused: !!c.paused, bgRefresh: !!c.bgRefresh, listKey: c.listKey || "", ical: !!c.ical,
-        baseline: Array.from(c.baseline || []), baselineFp: c.baselineFp || {}, baselineReady: !!c.baselineReady,
+        baseline: Array.from(c.baseline || []), baselineFp: c.baselineFp || {}, playedNotifications:normalizePlayedNotifications(c.playedNotifications ?? c.baselineFp), baselineReady: !!c.baselineReady,
         lastScanTs: c.lastScanTs || 0, lastOkTs: c.lastOkTs || 0, lastAlertAt:c.lastAlertAt || 0, status: c.status || "",
         reminded: c.reminded || {}, openedMail: c.openedMail || {}, openedGithub:c.openedGithub || {}, icon:nativeIconUrl(c.icon),
         hasScanned: !!c.hasScanned, actorOk: c.actorOk !== false,
@@ -282,6 +317,7 @@
       unpinnedIds: store.unpinnedIds,
       followedGames: store.followedGames,
       titleGameKey: store.titleGameKey,
+      inboxPending: store.inboxPending,
     };
   }
 
@@ -296,8 +332,18 @@
     }, 400);
   }
 
+  function retireGoogleScoreConnections(state) {
+    // Retire Google score-tab connections without closing or navigating tabs.
+    const removed=new Set((state.connections || []).filter(c=>c.service==='scores').map(c=>c.id));
+    state.connections=(state.connections || []).filter(c=>c.service!=='scores');
+    for(const [key,g]of Object.entries(state.followedGames || {}))if(removed.has(g.sourceId)){delete state.followedGames[key];if(state.titleGameKey===key)state.titleGameKey='';}
+    state.notifications=(state.notifications || []).filter(n=>!removed.has(n.sourceId));
+    for(const n of state.notifications)if(n.service==='scores' && n.game?.provider==='espn')n.service='espn';
+  }
+
   function prune(now) {
     now = now || Date.now();
+    retireGoogleScoreConnections(store);
     // Remove only the known toolbar controls emitted by the old Calendar adapter.
     store.notifications = store.notifications.filter((n) => !(n.service === "calendar" && /^(close|go back|main menu)$/i.test(n.summary.trim()) && (!n.detail || n.detail.trim() === n.summary.trim())));
     store.notifications = store.notifications.filter((n) => (n.service === "gmail" || n.nativeActive || now - n.ts < NOTIF_TTL_MS)).sort(compareNotifications).slice(0, MAX_NOTIFICATIONS);
@@ -315,17 +361,19 @@
       IOUtils.readUTF8(storeFilePath()).then((json) => {
         try {
           const d = JSON.parse(json);
+          retireGoogleScoreConnections(d);
           if (Array.isArray(d.connections)) {
             store.connections = d.connections.map((c) => ({
               id: String(c.id || ("src-" + Math.random().toString(36).slice(2))),
               service: Object.hasOwn(SERVICE_LABEL,c.service) ? c.service : "gmail",
               url: typeof c.url === "string" ? c.url.slice(0, 600) : "",
-              label: typeof c.label === "string" ? c.label.slice(0, 160) : "",
+              label: typeof c.label === "string" ? c.label.slice(0, 160) : "", accountLabel:typeof c.accountLabel==="string"?c.accountLabel.slice(0,160):"",
               containerId: c.containerId | 0, ical: !!c.ical,
               paused: !!c.paused, bgRefresh: !!c.bgRefresh, listKey: c.listKey || "",
               baseline: new Set(Array.isArray(c.baseline) ? c.baseline : []),
               baselineReady: c.baselineReady ?? (Array.isArray(c.baseline) && c.baseline.length > 0),
               baselineFp: c.baselineFp && typeof c.baselineFp === "object" ? c.baselineFp : {},
+              playedNotifications:normalizePlayedNotifications(c.playedNotifications ?? c.baselineFp),
               lastScanTs: Number(c.lastScanTs) || 0, lastOkTs: Number(c.lastOkTs) || 0, lastAlertAt:Number(c.lastAlertAt) || 0, status: c.status || "",
               reminded: c.reminded && typeof c.reminded === "object" ? c.reminded : {}, openedMail: c.openedMail || {}, openedGithub:c.openedGithub || {}, icon:nativeIconUrl(c.icon),
               hasScanned: !!c.hasScanned, actorOk: c.actorOk !== false,
@@ -344,6 +392,7 @@
               game: n.game && typeof n.game === "object" ? n.game : null, itemId:n.itemId || "", mailDate:n.mailDate || "", mailTimeKnown:!!n.mailTimeKnown, mailVerified:false, githubVerified:false, githubTimeKnown:!!n.githubTimeKnown, mailPrecision:n.mailPrecision || "time", sourceRank:n.sourceRank || 0, observedTs:n.observedTs || 0, nativeKey:n.nativeKey || "", nativeInstance:n.nativeInstance || "", nativeActive:false, icon:n.icon || "",
             }));
           }
+          store.inboxPending=!!d.inboxPending;
           store.followedTeams = d.followedTeams || {};
           if (d.v !== 2) store.notifications = store.notifications.filter(n=>n.service !== "calendar");
           if (d.dismissIds && typeof d.dismissIds === "object") store.dismissIds = d.dismissIds;
@@ -375,6 +424,7 @@
   function applyRemote(json) {
     try {
       const d = JSON.parse(json);
+          retireGoogleScoreConnections(d);
       if (!d || ![1,2].includes(d.v)) return;
       store.seq = d.seq || 0;
       store.followedTeams = d.followedTeams || {};
@@ -389,17 +439,19 @@
       store.unpinnedIds = d.unpinnedIds || {};
       store.followedGames = d.followedGames || {};
       store.titleGameKey = d.titleGameKey || "";
+      store.inboxPending=!!d.inboxPending;
       if (Array.isArray(d.connections)) {
         const localById = new Map(store.connections.map((c) => [c.id, c]));
         store.connections = d.connections.map((c) => {
           const local = localById.get(String(c.id));
           return {
-            id: String(c.id), service: c.service, url: c.url, label: c.label,
+            id: String(c.id), service: c.service, url: c.url, label: c.label, accountLabel:typeof c.accountLabel==="string"?c.accountLabel.slice(0,160):"",
             containerId: c.containerId | 0, paused: !!c.paused, bgRefresh: !!c.bgRefresh, ical: !!(local ? local.ical : c.ical),
             listKey: c.listKey || "",
             baseline: local ? local.baseline : new Set(c.baseline || []),
             baselineReady: local ? !!local.baselineReady : !!c.baselineReady,
             baselineFp: local ? local.baselineFp : (c.baselineFp || {}),
+            playedNotifications:normalizePlayedNotifications(c.playedNotifications ?? local?.playedNotifications ?? c.baselineFp),
             lastScanTs: c.lastScanTs || 0, lastOkTs: c.lastOkTs || 0, lastAlertAt:c.lastAlertAt || 0, status: c.status || "",
             reminded: local ? local.reminded : (c.reminded || {}), openedMail:c.openedMail || {}, openedGithub:c.openedGithub || {}, icon:nativeIconUrl(c.icon),
             hasScanned: !!c.hasScanned, actorOk: c.actorOk !== false,
@@ -522,9 +574,6 @@
         if (u.pathname.startsWith("/search")) return "github";
         return "github";
       }
-      if (/^(www\.)?google\.[a-z.]+$/i.test(h) || h.endsWith(".google.com")) {
-        if (u.pathname.startsWith("/search")) return "scores";
-      }
     } catch (_e) {}
     return null;
   }
@@ -629,6 +678,13 @@
   // ------------------------------------------------ snapshot handling (shared-store change computation)
 
   window.WorkspaceNotificationsStore = {
+    canParseGmailAtom(data,bc) {
+      if(isPrivateWindow(window) || !isEnabled() || data.service!=='gmail')return false;
+      const conn=connForSourceId(data.sourceId),found=conn && findTabBySourceId(conn.id);
+      if(!conn || conn.paused || conn.service!=='gmail' || found?.tab?.linkedBrowser?.browsingContext!==bc?.top)return false;
+      const href=found.tab.linkedBrowser.currentURI?.spec;
+      return href===data.href && isSupportedUrl(href)==='gmail' && connectionIdentity('gmail',href,conn.containerId)===connectionIdentity('gmail',conn.url,conn.containerId);
+    },
     logDiagnostic(data) {
       const conn = connForSourceId(data?.sourceId);
       if (!conn || conn.paused || data.service !== conn.service) return;
@@ -682,7 +738,7 @@
   function handleSnapshotOwned(conn, snap) {
     if (!snap || typeof snap !== "object") return;
     if (snap.sourceId !== conn.id) return;
-    if (!["gmail", "github", "calendar", "scores"].includes(snap.service)) return;
+    if (!["gmail", "github", "calendar"].includes(snap.service)) return;
     if (snap.service !== conn.service || conn.service === "calendar") return;
 
     const href = typeof snap.href === "string" ? snap.href.slice(0, 500) : "";
@@ -716,6 +772,7 @@
     }
     if (snap.signin) {
       setStatus(conn, "Sign-in required", false);
+      requestAccountSignin(conn);
       broadcast(window);
       renderAll();
       return;
@@ -727,18 +784,16 @@
       return;
     }
 
+    clearAccountSignin(conn);
     const items = Array.isArray(snap.items) ? snap.items.slice().sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0, 50) : [];
     const isFirst = !conn.baselineReady;
-    const account = sourceAccount(conn, snap);
+    if(typeof snap.meta?.accountLabel==='string' && snap.meta.accountLabel)conn.accountLabel=snap.meta.accountLabel.slice(0,160);
+    const account = conn.accountLabel || sourceAccount(conn, snap);
     let changed = false;
 
-    if (conn.service === "scores") {
-      changed = ingestScores(conn, items, account, !!snap.navigated) || changed;
-    } else {
-      const res = conn.service === "gmail" ? ingestGmail(conn, items, account, isFirst, snap.meta || {}) : conn.service === "github" ? ingestGitHub(conn,items,isFirst) : ingestListWrapped(conn, items, account, isFirst);
-      conn.baselineReady = true;
-      changed = res.changed || changed;
-    }
+    const res = conn.service === "gmail" ? ingestGmail(conn, items, account, isFirst, snap.meta || {}) : conn.service === "github" ? ingestGitHub(conn,items,isFirst,snap.meta || {}) : ingestListWrapped(conn, items, account, isFirst);
+    conn.baselineReady = true;
+    changed = res.changed || changed;
 
     setStatus(conn, conn.paused ? "Paused" : "Monitoring", true);
     if (changed) broadcast(window);
@@ -746,7 +801,8 @@
     renderAll();
   }
 
-  function ingestGmail(conn, items, account, isFirst, meta) {
+  function ingestGmail(conn, items, account, isFirst, meta={}) {
+    const played=inboxPlayedCache(conn,items,meta);
     const previous = store.notifications.filter(n => n.service === "gmail" && n.sourceId === conn.id);
     const byItem = new Map(previous.map(n => [notifItemKey(n), n]));
     conn.openedMail ||= {};
@@ -756,10 +812,11 @@
     // Leaving the rendered list hides an item; it never deletes email.
     for (const id of Object.keys(conn.openedMail)) if (!reported.has(id)) delete conn.openedMail[id];
     store.notifications = store.notifications.filter(n => !(n.service === "gmail" && n.sourceId === conn.id));
-    const next = [];
+    const next = [], briefs=[];
     for (const item of items) {
       if (!item?.id || item.meta?.unread === false) continue;
       const old = byItem.get(item.id), fp = String(item.fingerprint || "");
+      const alreadyPlayed=Object.hasOwn(played,item.id) && played[item.id].includes(fp);rememberPlayed(played,item.id,fp);
       if (conn.openedMail[item.id] === fp) continue; // Suppress a cached snapshot after opening.
       const base = "n-" + conn.id + "-" + item.id;
       const id = base + (fp ? "-r" + fp.slice(0,8) : "");
@@ -770,9 +827,10 @@
         url:validHttpsUrl(item.url), ts:known ? ts : 0, observedTs:old?.observedTs || Date.now(), mailTimeKnown:known, mailPrecision:item.meta?.precision || "time", sourceRank:item.meta?.sourceRank || 0,
         mailDate:String(item.meta?.date || "").slice(0,100), mailVerified:true, seen:old?.seen ?? isFirst, kind:"alert"};
       next.push(n);
-      if (!isFirst && (!conn.baseline.has(item.id) || conn.baselineFp[item.id] !== fp)) onNewBrief(n);
+      if (!isFirst && !alreadyPlayed && (!conn.baseline.has(item.id) || conn.baselineFp[item.id] !== fp)) briefs.push(n);
     }
     store.notifications = [...next, ...store.notifications];
+    for(const n of briefs)onNewBrief(n);
     conn.baseline = reported;
     conn.baselineFp = Object.fromEntries(items.map(item=>[item.id,String(item.fingerprint || "")]));
     return {changed:JSON.stringify(previous) !== JSON.stringify(next)};
@@ -865,125 +923,7 @@
     return itemId;
   }
 
-  function ingestScores(conn, items, account, navigated) {
-    let changed = false;
-    void navigated;
-    if (items.some((it) => it.meta?.home && it.meta?.away)) {
-      for (const [key, game] of Object.entries(store.followedGames)) {
-        if (game.sourceId === conn.id && game.manual) {
-          if (store.titleGameKey === key && !game.dismissed) conn.followNextGame = true;
-          delete store.followedGames[key];
-          if (store.titleGameKey === key) store.titleGameKey = "";
-        }
-      }
-    }
-    for (const it of items) {
-      const meta = it.meta || {};
-      if (!meta.supported && !meta.home) {
-        setStatus(conn, "Unsupported page", false);
-        continue;
-      }
-      const key = gameKeyFor(meta, it.id);
-      // Transfer an existing selection when old container text included the
-      // short name and record alongside the actual team name.
-      for (const [oldKey, old] of Object.entries(store.followedGames)) {
-        if (oldKey === key || old.sourceId !== conn.id) continue;
-        if (String(old.away).includes(meta.away) && String(old.home).includes(meta.home)) {
-          if (store.titleGameKey === oldKey && !old.dismissed) conn.followNextGame = true;
-          for (const notification of store.notifications) {
-            if (notification.game?.key !== oldKey) continue;
-            notification.summary = notification.summary.replace(old.away, meta.away).replace(old.home, meta.home);
-            Object.assign(notification.game, {key, away:meta.away, home:meta.home, awayIcon:teamIconUrl(meta.awayIcon), homeIcon:teamIconUrl(meta.homeIcon)});
-          }
-          delete store.followedGames[oldKey]; changed = true;
-        }
-      }
-      const requestedFollow = !!conn.followNextGame;
-      if (requestedFollow) {
-        conn.followNextGame = false;
-        store.titleGameKey = key;
-        if (store.followedGames[key]) {
-          store.followedGames[key].dismissed = false;
-          store.followedGames[key].pinFinal = /final/i.test(meta.status || "");
-        }
-      }
-      const prev = store.followedGames[key];
-      const status = String(meta.status || "").slice(0, 80);
-      const hs = String(meta.homeScore != null ? meta.homeScore : "");
-      const as = String(meta.awayScore != null ? meta.awayScore : "");
-      const summary = String(it.summary || "").slice(0, 200);
-      if (!prev) {
-        // Newly observed match card: record but do not alert until followed.
-        if (!store.followedGames[key]) {
-          store.followedGames[key] = {
-            id: key, sourceId: conn.id, home: meta.home || "", away: meta.away || "",
-            homeScore: hs, awayScore: as, homeIcon: teamIconUrl(meta.homeIcon), awayIcon: teamIconUrl(meta.awayIcon), sport: meta.sport || "", status, lastUpdate: Date.now(),
-            dismissed: false, showInTitle: requestedFollow, pinFinal: requestedFollow && /final/i.test(status), account,
-          };
-          changed = true;
-          // Frictionless live scores: an explicitly connected tab showing a
-          // single live game follows it automatically for the title.
-          try {
-            const mine = Object.entries(store.followedGames).filter(([, gg]) => gg.sourceId === conn.id && !gg.dismissed);
-            if (mine.length === 1 && (!store.titleGameKey || (store.followedGames[store.titleGameKey] || {}).dismissed)) {
-              if (isLiveStatus(status)) {
-                store.titleGameKey = key;
-                store.followedGames[key].showInTitle = true;
-              }
-            }
-          } catch (_e) {}
-        }
-        continue;
-      }
-      const iconChanged = (teamIconUrl(meta.homeIcon) && teamIconUrl(meta.homeIcon) !== prev.homeIcon) || (teamIconUrl(meta.awayIcon) && teamIconUrl(meta.awayIcon) !== prev.awayIcon);
-      if (iconChanged || requestedFollow) changed = true;
-      const scoreChanged = prev.homeScore !== hs || prev.awayScore !== as;
-      const statusChanged = prev.status !== status;
-      prev.homeScore = hs; prev.awayScore = as; prev.status = status;
-      prev.home = meta.home || prev.home; prev.away = meta.away || prev.away;
-      prev.homeIcon = teamIconUrl(meta.homeIcon) || prev.homeIcon || "";
-      prev.awayIcon = teamIconUrl(meta.awayIcon) || prev.awayIcon || "";
-      prev.sport = meta.sport || prev.sport || "";
-      prev.lastUpdate = Date.now(); prev.account = account; prev.sourceId = conn.id;
-      if (scoreChanged && !prev.dismissed) {
-        // Update one existing game item as its score changes; clock ticks alone do nothing.
-        const nid = "n-game-" + key.replace(/[^a-z0-9]+/gi, "").slice(0, 40) + "-" + hs + "-" + as;
-        if (!store.dismissIds[nid]) {
-          pushNotification({
-            id: nid, service: "scores", sourceId: conn.id, account,
-            summary: summary || (prev.away + " " + as + " – " + hs + " " + prev.home),
-            detail: status, url: validHttpsUrl(it.url), ts: Date.now(), kind: "game",
-            game: { key, ...scoreSnapshot(prev) },
-          });
-          changed = true;
-        }
-        if (!store.titleGameKey || (store.followedGames[store.titleGameKey] || {}).dismissed) {
-          if (isLiveStatus(status)) { store.titleGameKey = key; prev.showInTitle = true; }
-        }
-      } else if (statusChanged) {
-        if (/final/i.test(status) && !prev.dismissed) {
-          finalScore(key, prev, account, conn.id, validHttpsUrl(it.url));
-          changed = true;
-        } else if (isLiveStatus(status) && !store.titleGameKey) {
-          store.titleGameKey = key;
-        }
-      }
-    }
-    return changed;
-  }
-
   function isLiveStatus(s) { return /live|q\d|half|quarter|inning|period|ot\b/i.test(s || ""); }
-
-  function finalScore(key, g, account, sourceId, url) {
-    const nid = "n-game-final-" + key.replace(/[^a-z0-9]+/gi, "").slice(0, 40);
-    if (store.dismissIds[nid]) return;
-    pushNotification({
-      id: nid, service: "scores", sourceId, account,
-      summary: "Final: " + g.away + " " + g.awayScore + " – " + g.homeScore + " " + g.home,
-      detail: "Final", url, ts: Date.now(), kind: "game", game: { key, final: true, ...scoreSnapshot(g) },
-    });
-    g.finalShownTs = Date.now();
-  }
 
   // ------------------------------------------------ title presentation
 
@@ -1029,6 +969,9 @@
       (n.service !== "gmail" || n.mailVerified) &&
       (n.service !== "github" || n.githubVerified) &&
       !(n.kind === "game" && !n.game?.final));
+    const live=cands.filter(n=>n.nativeActive && !connForSourceId(n.sourceId)?.paused).sort(compareNotifications);
+    if(live.length)return live[0];
+    if(currentScoreGame())return null;
     if (!cands.length) return null;
     cands.sort(compareNotifications);
     return cands[0];
@@ -1038,7 +981,7 @@
   // but keep its card in the notification center.
   function unpinFromIndicator() {
     const pinned = currentPinnedNotification();
-    if (!pinned) return false;
+    if(!pinned || notificationIsLive(pinned))return false;
     store.unpinnedIds[pinned.id] = Date.now();
     if (pinned.kind === "game" && pinned.game?.key && store.followedGames[pinned.game.key]) {
       if (store.titleGameKey === pinned.game.key) store.titleGameKey = "";
@@ -1047,11 +990,16 @@
     renderAll();
     return true;
   }
+  function hideGameFromWorkspace(key) {
+    store.unpinnedIds['game:'+key]=Date.now();
+    if(store.titleGameKey===key)store.titleGameKey='';
+    broadcast(window);renderAll();
+  }
   function currentScoreGame() {
     if (isPrivateWindow(window) || !isEnabled()) return null;
     const chosen=store.followedGames[store.titleGameKey];
-    if (chosen && chosen.showInTitle && !chosen.dismissed && !chosen.manual && gameActive(chosen) && (gameIsLive(chosen) || chosen.pinFinal)) return {key:store.titleGameKey,g:chosen};
-    const games=Object.entries(store.followedGames).filter(([,g])=>!g.manual && !g.dismissed && gameActive(g) && gameIsLive(g)).sort((a,b)=>(a[1].startTs||a[1].lastUpdate)-(b[1].startTs||b[1].lastUpdate));
+    if (!store.unpinnedIds['game:'+store.titleGameKey] && chosen && chosen.showInTitle && !chosen.dismissed && !chosen.manual && gameActive(chosen) && (gameIsLive(chosen) || chosen.pinFinal)) return {key:store.titleGameKey,g:chosen};
+    const games=Object.entries(store.followedGames).filter(([key,g])=>!store.unpinnedIds['game:'+key] && !g.manual && !g.dismissed && gameActive(g) && gameIsLive(g)).sort((a,b)=>(a[1].startTs||a[1].lastUpdate)-(b[1].startTs||b[1].lastUpdate));
     return games.length ? {key:games[0][0],g:games[0][1]} : null;
   }
 
@@ -1064,7 +1012,8 @@
 
   function scoreSnapshot(g) {
     return {away: g.away, home: g.home, awayScore: g.awayScore, homeScore: g.homeScore,
-      awayAbbr:g.awayAbbr || "", homeAbbr:g.homeAbbr || "", awayIcon: g.awayIcon || "", homeIcon: g.homeIcon || "", sport: g.sport || "", status: g.status || ""};
+      awayAbbr:g.awayAbbr || "", homeAbbr:g.homeAbbr || "", awayIcon: g.awayIcon || "", homeIcon: g.homeIcon || "", sport: g.sport || "", status: g.status || "",
+      league:g.league || '',period:g.period || 0,displayClock:g.displayClock || '',statusName:g.statusName || '',state:g.state || '',completed:!!g.completed};
   }
 
   function scoreBoard(g) {
@@ -1088,19 +1037,34 @@
       }
       return slot;
     };
-    // Visible strip is icons + score only; full team names stay in the
+    // Visible strip keeps icons + score, with reported period/clock below;
+    // full team names stay in the
     // aria-label/title (scoreText) and in the live menu card caption.
     const hasScores = g.awayScore !== "" && g.awayScore != null && g.homeScore !== "" && g.homeScore != null;
     const line = document.createElement("span");
     line.className = "wn-score-line";
     line.setAttribute("aria-hidden", "true");
-    line.textContent = hasScores ? g.awayScore + " \u2013 " + g.homeScore : "vs";
-    board.append(logo(g.away, g.awayIcon, g.awayAbbr), line, logo(g.home, g.homeIcon, g.homeAbbr));
+    if (hasScores) {
+      const away = document.createElement("span");
+      away.className = "wn-score-away";
+      away.textContent = g.awayScore;
+      const home = document.createElement("span");
+      home.className = "wn-score-home";
+      home.textContent = g.homeScore;
+      line.append(away, home);
+    } else {
+      line.classList.add("wn-score-pregame");
+      line.textContent = "vs";
+    }
+    const center=document.createElement('span');center.className='wn-score-center';center.appendChild(line);
+    const status=gameScoreStatus(g);
+    if(status){const info=document.createElement('span');info.className='wn-score-info';info.textContent=status;info.setAttribute('aria-hidden','true');center.appendChild(info);}
+    board.append(logo(g.away, g.awayIcon, g.awayAbbr), center, logo(g.home, g.homeIcon, g.homeAbbr));
     return board;
   }
 
   function paintTitleContent(text, game = null) {
-    const signature = game ? JSON.stringify([game.away, game.home, game.awayAbbr, game.homeAbbr, game.awayScore, game.homeScore, game.awayIcon, game.homeIcon, game.status]) : text;
+    const signature = game ? JSON.stringify([game.away, game.home, game.awayAbbr, game.homeAbbr, game.awayScore, game.homeScore, game.awayIcon, game.homeIcon, game.status,gameScoreStatus(game)]) : text;
     if (titleState.contentSignature === signature) return;
     titleState.contentSignature = signature;
     if (game) {
@@ -1110,15 +1074,50 @@
   }
 
   function scoreText(g) {
-    return g.away + " " + g.awayScore + " – " + g.homeScore + " " + g.home + (g.status ? " · " + g.status : "");
+    const status=gameScoreStatus(g);
+    return g.away + " " + g.awayScore + " – " + g.homeScore + " " + g.home + (status ? " · " + status : "");
   }
 
   function onNewBrief(n) {
     if (isPrivateWindow(window) || !isEnabled()) return;
     // The indicator derives the pinned notification from the store, so new
     // arrivals appear there and stay until dismissed or opened. No timers.
-    void n;
+    if(!notificationIsLive(n) && (currentPinnedNotification()?.nativeActive || currentScoreGame()) && !inboxIsVisible())store.inboxPending=true;
+    if (n.kind!=='game') emitPopup({id:'notification:'+n.id,notificationId:n.id,title:'New '+(SERVICE_LABEL[n.service] || n.service || 'App')+' Notification',
+      isCurrent:()=>!store.dismissIds[n.id] && (!connForSourceId(n.sourceId)?.paused) && store.notifications.some(x=>x.id===n.id)});
     renderTitle();
+  }
+
+  function emitPopup(payload) {
+    if (!isEnabled() || !getPref('popups.enabled',true) || isPrivateWindow(window)) return;
+    let target=window;
+    try {target=Services.wm.getMostRecentWindow('navigator:browser') || window;}catch(_e){}
+    if(isPrivateWindow(target))return;
+    // Only the originating adapter emits; store broadcasts never replay alerts.
+    if(target!==window && target.WorkspaceNotifications?.showPopup)target.WorkspaceNotifications.showPopup(payload);
+    else Popups?.show(payload);
+  }
+
+  function sendTestNotification() {
+    if(!isEnabled() || !getPref('popups.enabled',true) || isPrivateWindow(window))return false;
+    pushNotification({id:'test:'+Date.now()+':'+store.seq,service:'Workspace',sourceId:'',summary:'Test notification',detail:'Your notification popup is working. Use the toast action to open this Inbox.',url:'',ts:Date.now(),seen:false,kind:'alert'});
+    broadcast(window);renderAll();
+    return true;
+  }
+
+  function announceGameChanges(previous,current) {
+    if (current.dismissed || !gameActive(current)) return;
+    const seen=new Set(current.popupEventKeys || []);
+    const events=gameTransitions(previous,current).filter(e=>!seen.has(e.key));
+    if(!events.length)return;
+    for(const event of events)seen.add(event.key);
+    current.popupEventKeys=[...seen].slice(-64);
+    const scores=current.awayScore!=='' && current.homeScore!=='' ? `${current.awayAbbr || current.away} ${current.awayScore} – ${current.homeScore} ${current.homeAbbr || current.home}` : `${current.away} vs ${current.home}`;
+    emitPopup({id:`game:${current.id}:${events.map(e=>e.key).join('|')}`,
+      title:events.map(e=>e.title).join(' · ')+': '+scores,
+      destination:[current.league?.toUpperCase() || 'Scores','Workspace notifications → Inbox',current.completed || /final/i.test(current.status || '')?'Recent notifications':'Live games'].join(' · '),
+      coalesceKey:events.every(e=>e.kind==='score')?'score:'+current.id:null,
+      isCurrent:()=>{const g=store.followedGames[current.id];return !!g && !g.dismissed && gameActive(g);}});
   }
 
   function paintOverlay() {
@@ -1130,8 +1129,23 @@
     // Incoming notifications take the workspace icon and stay there until
     // dismissed or opened; live scores use it only when nothing is pinned.
     const iconNotif = enabled ? pinned : null;
+    if(titleState.pendingDot){
+      titleState.pendingDot.hidden=!(enabled && store.inboxPending);
+      if(!titleState.pendingDot.hidden && titleState.bound){
+        try{
+          const indicator=titleState.bound;
+          const style=window.getComputedStyle(indicator);
+          // Native hover surface is inset independently of content padding.
+          const surface=window.getComputedStyle(indicator,'::before');
+          const top=parseFloat(surface.top),left=parseFloat(surface.left),width=parseFloat(surface.width);
+          const hasSurface=surface.content && !['none','normal'].includes(surface.content) && Number.isFinite(top) && Number.isFinite(left) && Number.isFinite(width) && width>0;
+          titleState.pendingDot.style.top=(hasSurface ? top-1 : Math.max(0,(parseFloat(style.paddingTop)||0)-5))+'px';
+          titleState.pendingDot.style.right=(hasSurface ? Math.max(0,indicator.clientWidth-left-width)-1 : Math.max(0,(parseFloat(style.paddingRight)||0)-5))+'px';
+        }catch(_e){}
+      }
+    }
     paintWorkspaceGameIcon(enabled ? score?.g || null : null, iconNotif);
-    if (titleState.unpinBtn) titleState.unpinBtn.hidden = !(enabled && pinned);
+    if (titleState.unpinBtn) titleState.unpinBtn.hidden = !(enabled && pinned && !notificationIsLive(pinned));
     if (titleState.bar) titleState.bar.classList.toggle("wn-ind-hover", !!titleState.indicatorHovered);
     if (!isEnabled() || isPrivateWindow(window) || isEditing()) {
       overlay.classList.remove("wn-show");
@@ -1157,7 +1171,7 @@
   function renderTitle() { renderAll(); }
 
   function paintWorkspaceGameIcon(game, notif) {
-    const src = notif || (game ? { service: "scores", sourceId: game.sourceId, url: game.url } : null);
+    const src = notif || (game ? { service: "espn", sourceId: game.sourceId, url: game.url } : null);
     titleState.bound?.classList.toggle("wn-game-present", !!src);
     const icon = titleState.bound?.querySelector(".zen-current-workspace-indicator-icon");
     if (!icon) return;
@@ -1184,7 +1198,7 @@
     glyph.classList.remove("wn-native-football");
     glyph.style.removeProperty("--wn-sport-icon");
     // Native tab favicon where one exists, Tabler glyph for tab-free feeds.
-    const image = appIcon({ service: src.service || "scores", sourceId: src.sourceId, url: src.url || connForSourceId(src.sourceId)?.url });
+    const image = appIcon({ service: src.service || "espn", sourceId: src.sourceId, url: src.url || connForSourceId(src.sourceId)?.url });
     const existing = glyph.querySelector("[data-wn-src]");
     if (existing && existing.localName === "img" && image.localName === "img") { if (existing.getAttribute("src") !== image.getAttribute("src")) existing.src = image.src; }
     else if (!existing || existing.dataset.wnSrc !== image.dataset.wnSrc) glyph.replaceChildren(image);
@@ -1198,7 +1212,7 @@
     const pinned = currentPinnedNotification();
     const game = currentScoreGame();
     const lead = pinned ? (pinned.game?.away ? scoreText(pinned.game) + ". " : pinned.summary + ". ") : game ? scoreText(game.g) + ". " : "";
-    bar.setAttribute("aria-label", lead + n + " unread notifications. Open notifications.");
+    bar.setAttribute("aria-label", lead + (store.inboxPending ? "New notifications in Inbox. " : "") + n + " unread notifications. Open notifications.");
   }
 
   function ensureTitleBound() {
@@ -1207,6 +1221,7 @@
     if (titleState.bound === ind && ind.contains(titleState.overlay)) return;
     // Clean previous.
     paintWorkspaceGameIcon(null);
+    titleState.pendingDot?.remove();
     titleState.bar?.remove();
     if (titleState.overlay && titleState.overlay.parentNode) {
       try { titleState.overlay.parentNode.removeChild(titleState.overlay); } catch (_e) {}
@@ -1227,6 +1242,7 @@
     });
     ind.insertBefore(bar, menu || null);
     titleState.bar = bar;
+    const pendingDot=document.createElement('span');pendingDot.className='wn-pending-dot';pendingDot.hidden=true;pendingDot.setAttribute('aria-hidden','true');pendingDot.title='New notifications in Inbox';ind.append(pendingDot);titleState.pendingDot=pendingDot;
     // Status display in the row before the native workspace action/menu button.
     const overlay = document.createElement("div");
     overlay.className = "wn-title-overlay";
@@ -1343,12 +1359,18 @@
 
   // The standalone Notifications feed is gone; the indicator opens the
   // Sources panel straight into the identical Inbox list.
+  function inboxIsVisible() {return isFeedOpen() && sourceView==='inbox';}
+  function acknowledgeInbox() {
+    if(!store.inboxPending)return;
+    store.inboxPending=false;broadcast(window);renderAll();
+  }
   function openFeedPanel(anchor, pinned = false) {
     if (isPrivateWindow(window) || !isEnabled() || isEditing()) return;
     ensurePanels();
     panelPinned = panelPinned || pinned;
     panelView = "sources";
     sourceView = "inbox";
+    acknowledgeInbox();
     sourceDetailId = "";
     renderSourcesPanel();
     const ind = anchor || findIndicator() || document.documentElement;
@@ -1422,13 +1444,13 @@
       for (const [key, game] of ongoing) {
         const card = document.createElement("div"); card.className = "wn-live-card"; card.tabIndex=0;card.setAttribute("role","button"); card.setAttribute("data-wn-key", "live-" + key);
         card.setAttribute("aria-label", "Open live game: " + scoreText(game));
-        const status = document.createElement("span"); status.className = "wn-live-status"; status.textContent = "LIVE · " + game.status;
+        const status = document.createElement("span"); status.className = "wn-live-status"; status.textContent = "LIVE";
         const names = document.createElement("span"); names.className = "wn-match-caption"; names.textContent = game.away + " vs " + game.home;
         card.append(status, scoreBoard(game), names);
         card.onclick = () => openNotification({sourceId:game.sourceId, url:game.url || connForSourceId(game.sourceId)?.url || "", id:"live-"+key, game:{key}});
-        card.onkeydown=e=>{if(e.key==="Enter" || e.key===" ") {e.preventDefault();openNotification({sourceId:game.sourceId,url:game.url || connForSourceId(game.sourceId)?.url});}};
-        const pin=document.createElement("button");pin.className="wn-btn wn-small";pin.textContent=store.titleGameKey===key ? "In workspace" : "Show in workspace";
-        pin.onclick=e=>{e.stopPropagation();store.titleGameKey=key;game.showInTitle=true;broadcast(window);renderAll();};card.append(pin);
+        card.onkeydown=e=>{if((e.key==="Enter" || e.key===" ") && !e.target.closest("button")) {e.preventDefault();openNotification({sourceId:game.sourceId,url:game.url || connForSourceId(game.sourceId)?.url});}};
+        const pin=document.createElement("button");pin.className="wn-btn wn-small";const inWorkspace=currentScoreGame()?.key===key;pin.textContent=inWorkspace ? "Hide from workspace" : "Show in workspace";
+        pin.onclick=e=>{e.stopPropagation();if(inWorkspace){hideGameFromWorkspace(key);return;}delete store.unpinnedIds['game:'+key];store.titleGameKey=key;game.showInTitle=true;broadcast(window);renderAll();};card.append(pin);
         list.appendChild(card);
       }
       for (const n of nativeLive) {
@@ -1443,12 +1465,9 @@
         const openCal = () => { n.seen = true; broadcast(window); openNotification(n); };
         card.onclick = (e) => { if (!e.target.closest("button")) openCal(); };
         card.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button")) { e.preventDefault(); openCal(); } };
-        const dis = document.createElement("button");
-        dis.type = "button"; dis.className = "wn-btn wn-dismiss"; dis.title = "Dismiss";
-        dis.appendChild(wnIcon("close"));
-        dis.setAttribute("aria-label", "Dismiss calendar reminder");
-        dis.onclick = (e) => { e.stopPropagation(); dismissNotification(n.id); };
-        card.append(dis);
+        const pin=document.createElement('button');pin.type='button';pin.className='wn-btn wn-small';
+        const hidden=!!store.unpinnedIds[n.id];pin.textContent=hidden?'Show in workspace':'Hide from workspace';
+        pin.onclick=e=>{e.stopPropagation();if(hidden)delete store.unpinnedIds[n.id];else store.unpinnedIds[n.id]=Date.now();broadcast(window);renderAll();};card.append(pin);
         list.append(card);
       }
       list.querySelector(".wn-empty")?.remove();
@@ -1523,7 +1542,17 @@
     }
   }
 
+  function notificationIsLive(n) {
+    const game=n.game?.key && store.followedGames[n.game.key];
+    return !!n.nativeActive || !!(game && gameIsLive(game));
+  }
+  function canClearNotification(n) {
+    return !store.dismissIds[n.id] && !notificationIsLive(n) &&
+      (n.service!=='gmail' || n.mailVerified) && (n.service!=='github' || n.githubVerified);
+  }
   function dismissNotification(id, quiet = false) {
+    const item=store.notifications.find(n=>n.id===id);
+    if(item && notificationIsLive(item))return false;
     store.dismissIds[id] = Date.now();
     // Dismissing a game stops its title display until followed again.
     const n = store.notifications.find((x) => x.id === id);
@@ -1541,21 +1570,27 @@
 
   function clearAllNotifications() {
     for (const n of store.notifications) {
-      if (!store.dismissIds[n.id]) dismissNotification(n.id, true);
+      if (canClearNotification(n)) dismissNotification(n.id, true);
     }
-    // Live ESPN/manual games render as live cards even without a notification
-    // row; dismiss those too so Clear all truly empties the inbox.
-    for (const [key, g] of Object.entries(store.followedGames)) {
-      if (!g.dismissed && gameActive(g)) {
-        g.dismissed = true;
-        if (store.titleGameKey === key) store.titleGameKey = "";
-      }
-    }
-    if (store.titleGameKey && store.followedGames[store.titleGameKey]?.dismissed) store.titleGameKey = "";
     broadcast(window); renderAll();
   }
 
+  function requestAccountSignin(conn) {
+    pushNotification({id:'auth:'+conn.id,service:conn.service,sourceId:conn.id,summary:'Sign in to '+(SERVICE_LABEL[conn.service] || conn.service),detail:'Your paired account needs you to sign in again. Open this notification to continue.',url:conn.url,ts:Date.now(),seen:false,kind:'auth'});
+  }
+  function clearAccountSignin(conn) {
+    const id='auth:'+conn.id;store.notifications=store.notifications.filter(n=>n.id!==id);delete store.dismissIds[id];delete store.unpinnedIds[id];
+  }
+  function showAccountSignin(n) {
+    const conn=connForSourceId(n.sourceId);if(!conn || conn.paused)return;
+    hidePanels();
+    const label=SERVICE_LABEL[conn.service] || conn.service;
+    const flags=Services.prompt.BUTTON_POS_0*Services.prompt.BUTTON_TITLE_IS_STRING+Services.prompt.BUTTON_POS_1*Services.prompt.BUTTON_TITLE_CANCEL;
+    const choice=Services.prompt.confirmEx(window,'Sign in to '+label,'Your paired '+label+' account needs to sign in again. Continue on its official website using the same container.',flags,'Open sign-in page',null,null,null,{});
+    if(choice===0)openNotification({...n,kind:'alert',url:conn.service==='github'?'https://github.com/login?return_to=%2Fnotifications':conn.url});
+  }
   function openNotification(n) {
+    if(n.kind==='auth'){showAccountSignin(n);return;}
     hidePanels();
     const found = findTabBySourceId(n.sourceId);
     if (found) {
@@ -1606,7 +1641,6 @@
             if (hints.includes("mail.google.com")) hinted = "gmail";
             else if (hints.includes("calendar.google.com")) hinted = "calendar";
             else if (hints.includes("github.com")) hinted = "github";
-            else if (hints.includes("google.") && hints.includes("search")) hinted = "scores";
           }
           if (!hinted) continue;
           let boundId = "";
@@ -1624,16 +1658,18 @@
     return out;
   }
 
+  function connectionIdentity(service,value,container) {
+      let scope=(value || '').split('#')[0];
+      if(NATIVE_SERVICES.has(service) || service==='github')try{scope=new URL(value).origin;}catch(_e){}
+      if(service==='gmail')try{scope=new URL(value).origin+'/mail/u/'+(new URL(value).pathname.match(/\/u\/(\d+)/)?.[1] || '0');}catch(_e){}
+      return service+'|'+scope+'|'+(container || 0);
+  }
+
   function connectTab(entry) {
     const url = validHttpsUrl(entry.url) || entry.url;
     // Deduplicate duplicate connections to the same account/list or match.
-    const identity=(service,value,container)=>{
-      let scope=(value || '').split('#')[0];
-      if(NATIVE_SERVICES.has(service))try{scope=new URL(value).origin;}catch(_e){}
-      return service+'|'+scope+'|'+(container || 0);
-    };
-    const key=identity(entry.service,url,entry.containerId);
-    const dupe=store.connections.find(c=>!c.ical && identity(c.service,c.url,c.containerId)===key);
+    const key=connectionIdentity(entry.service,url,entry.containerId);
+    const dupe=store.connections.find(c=>!c.ical && connectionIdentity(c.service,c.url,c.containerId)===key);
     if (dupe) {
       if (dupe.paused) dupe.paused = false;
       activateOnTab(entry.win, entry.tab, dupe);
@@ -1744,14 +1780,6 @@
     } catch (_e) {}
   }
 
-  function followTabAsGame(connId) {
-    const conn = connForSourceId(connId);
-    if (!conn || conn.service !== "scores") return;
-    conn.followNextGame = true;
-    scanSource(connId);
-    renderAll();
-  }
-
   function diagnosticsText() {
     const lines = [];
     try {
@@ -1782,27 +1810,27 @@
     feedPanel.classList.add("wn-wide");
     const el=(tag,cls,text)=>{const n=document.createElement(tag);n.className=cls || "";if(text!=null)n.textContent=text;return n;};
     const button=(text,fn)=>{const b=el("button","wn-btn wn-small",text);b.type="button";b.onclick=e=>{e.stopPropagation();fn();};return b;};
-    const nav=view=>{sourceView=view;sourceDetailId="";renderSourcesPanel();feedPanel.querySelector(".wn-main-title")?.focus();};
-    const openDetail=id=>{sourceView='app';sourceDetailId=id;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();};
+    const nav=view=>{accountPairing=false;sourceView=view;if(view==='inbox')acknowledgeInbox();sourceDetailId="";if(view==='teams' && !pickerTeams.length && !pickerStatus)loadTeamPicker();else renderSourcesPanel();feedPanel.querySelector(".wn-main-title")?.focus();};
+    const openDetail=id=>{sourceReturnView=sourceView;sourceView='app';sourceDetailId=id;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();};
     const visit=(url,containerId=0)=>{if(validHttpsUrl(url)){gBrowser.selectedTab=gBrowser.addTab(url,{userContextId:containerId,triggeringPrincipal:Services.scriptSecurityManager.getSystemPrincipal()});hidePanels();}};
     const toggle=(on,label,fn)=>{const b=button('',fn);b.setAttribute('role','switch');b.setAttribute('aria-checked',String(on));b.setAttribute('aria-label',label);b.classList.toggle('wn-on',on);return b;};
     const dot=on=>{const d=el('span','wn-dot'+(on?' on':''));d.setAttribute('aria-hidden','true');return d;};
     const chev=label=>{const b=el('button','wn-chev');b.type='button';b.title=label;b.setAttribute('aria-label',label);b.appendChild(wnIcon('chev'));return b;};
-    const appSub=c=>c.service==='gmail' ? (c.label?.match(/[\w.+-]+@[\w.-]+/)?.[0] || 'Account '+((c.url?.match(/\/u\/(\d+)/)?.[1] || '0')*1+1)) : c.service==='calendar' ? (c.ical ? 'iCal feed' : 'Google Calendar') : c.service==='github' ? 'Unread notification inbox' : (c.label || c.url);
+    const appSub=c=>c.accountLabel || (c.service==='gmail' ? (c.label?.match(/[\w.+-]+@[\w.-]+/)?.[0] || 'Account '+((c.url?.match(/\/u\/(\d+)/)?.[1] || '0')*1+1)) : c.service==='calendar' ? (c.ical ? 'iCal feed' : 'Google Calendar') : c.service==='github' ? (c.label && c.label!=='GitHub' ? c.label : 'GitHub session') : (c.label || c.url));
     const setPaused=(c,paused)=>{c.paused=paused;const f=findTabBySourceId(c.id);if(f){if(paused)deactivateOnTab(f.tab,c.id,false);else activateOnTab(f.win,f.tab,c);}broadcast(window);renderAll();};
     const disconnect=c=>{const f=findTabBySourceId(c.id);if(f)deactivateOnTab(f.tab,c.id);store.connections=store.connections.filter(x=>x.id!==c.id);store.notifications=store.notifications.filter(n=>n.sourceId!==c.id);for(const [key,g]of Object.entries(store.followedGames))if(g.sourceId===c.id)delete store.followedGames[key];broadcast(window);renderAll();};
     const openConn=c=>{const f=findTabBySourceId(c.id);if(f){f.win.gBrowser.selectedTab=f.tab;if(c.service==='github')f.win.openTrustedLinkIn('https://github.com/notifications?query=is%3Aunread','current',{targetBrowser:f.tab.linkedBrowser,userContextId:c.containerId || 0});f.win.focus();hidePanels();}else{visit(c.url,c.containerId);activateOnTab(window,gBrowser.selectedTab,c);}};
-    const appCard=c=>{
-      const card=el('div','wn-app-card');card.setAttribute('data-wn-key',c.id);
-      const iconWrap=el('span','wn-app-iconwrap');iconWrap.appendChild(appIcon(c));card.appendChild(iconWrap);
+    const appCard=(c,accountView=false)=>{
+      const card=el('div','wn-app-card wn-connected-app');card.setAttribute('data-wn-key',c.id);
+      const iconWrap=el('span','wn-app-iconwrap');iconWrap.appendChild(c.ical ? appIcon(c) : appBrandIcon(c.service) || appIcon(c));card.appendChild(iconWrap);
       const meta=el('div','wn-app-meta');
-      meta.append(el('div','wn-app-name',SERVICE_LABEL[c.service] || c.service));
-      meta.append(el('div','wn-app-sub',appSub(c)));
+      meta.append(el('div','wn-app-name',accountView?appSub(c):SERVICE_LABEL[c.service] || c.service));
+      meta.append(el('div','wn-app-sub',accountView?(SERVICE_LABEL[c.service]+' ? '+(c.containerId?'Container '+c.containerId:'Default container')):appSub(c)));
       const st=el('div','wn-app-status');st.append(dot(!c.paused && connStatusText(c).startsWith('Monitoring') || (!c.paused && c.hasScanned && c.status==='Monitoring')));
       const stText=el('span','',connStatusText(c));stText.title=connStatusText(c);st.append(stText);meta.append(st);
       card.append(meta);
-      card.append(toggle(!c.paused,'Monitor '+(SERVICE_LABEL[c.service] || c.service),()=>setPaused(c,!c.paused)));
-      const go=chev('Options for '+(SERVICE_LABEL[c.service] || c.service));go.setAttribute('data-wn-key','chev-'+c.id);go.onclick=e=>{e.stopPropagation();openDetail(c.id);};card.append(go);
+      card.append(toggle(!c.paused,'Monitor '+(SERVICE_LABEL[c.service] || c.service)+' '+appSub(c),()=>setPaused(c,!c.paused)));
+      const go=chev('Options for '+(SERVICE_LABEL[c.service] || c.service)+' '+appSub(c));go.setAttribute('data-wn-key','chev-'+c.id);go.onclick=e=>{e.stopPropagation();openDetail(c.id);};card.append(go);
       return card;
     };
     const teamNext=t=>{
@@ -1811,30 +1839,31 @@
     };
     const iconBtn=(icon,label,fn)=>{const b=el('button','wn-icon-btn');b.type='button';b.title=label;b.setAttribute('aria-label',label);b.appendChild(wnIcon(icon));b.onclick=e=>{e.stopPropagation();fn();};return b;};
     const teamCard=(key,t)=>{
-      const card=el('div','wn-app-card wn-has-corner');card.setAttribute('data-wn-key',key);
-      const img=el('img','wn-team-logo-img');img.src=teamIconUrl(t.logo);img.alt='';img.onerror=()=>{img.hidden=true;};card.append(img);
+      const card=el('div','wn-app-card wn-followed-team');card.setAttribute('data-wn-key',key);
+      const logo=el('span','wn-followed-logo');
+      const img=el('img','wn-team-logo-img');img.src=teamIconUrl(t.logo);img.alt='';
+      img.onerror=()=>{img.remove();logo.textContent=t.abbreviation || t.name.split(/\s+/).map(w=>w[0]).slice(0,3).join('');};logo.append(img);card.append(logo);
       const meta=el('div','wn-app-meta');
-      meta.append(el('div','wn-app-name',t.name));
-      const g=teamNext(t);
-      meta.append(el('div','wn-app-sub',t.league.toUpperCase()));
-      const st=el('div','wn-app-status');
-      if(g){const sTxt=el('span','',g.state==='in'?g.status:g.away+' vs '+g.home+' · '+new Date(g.startTs).toLocaleString());sTxt.title=sTxt.textContent;st.append(dot(g.state==='in'),sTxt);}
-      else if(t.paused)st.append(dot(false),el('span','','Paused'));
-      else if(t.status!=='Monitoring')st.append(dot(false),el('span','',t.status));
-      else st.append(dot(false),el('span','','No upcoming game scheduled'));
-      meta.append(st);card.append(meta);
-      card.append(toggle(!t.paused,'Monitor '+t.name,()=>{t.paused=!t.paused;Sources.refresh(t.league);broadcast(window);renderAll();}));
-      const corner=el('div','wn-card-corner');
-      corner.append(iconBtn('open','Open '+t.name+' team page',()=>visit(t.url)));
-      const unf=iconBtn('check','Following — click to unfollow '+t.name,()=>unfollowTeam(key));unf.classList.add('wn-is-on');corner.append(unf);
-      card.append(corner);
+      meta.append(el('div','wn-app-name',t.name),el('div','wn-app-sub',t.league.toUpperCase()));
+      const g=teamNext(t),st=el('div','wn-app-status wn-team-next');
+      st.append(tablerCalendarClock());
+      let label='No upcoming game scheduled';
+      if(t.paused)label='Paused';
+      else if(g){
+        const opponent=String(g.teamIds?.[0])===String(t.id) ? g.away : String(g.teamIds?.[1])===String(t.id) ? g.home : g.away===t.name ? g.home : g.away;
+        label=g.state==='in' ? gameScoreStatus(g) : 'vs '+opponent+' \u00b7 '+new Date(g.startTs).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+      }else if(t.status && t.status!=='Monitoring')label=t.status;
+      const text=el('span','',label);text.title=label;st.append(text);meta.append(st);card.append(meta);
+      const monitor=toggle(!t.paused,'Monitor '+t.name,()=>{t.paused=!t.paused;Sources.refresh(t.league);broadcast(window);renderAll();});monitor.setAttribute('data-wn-key','monitor-'+key);card.append(monitor);
+      const options=chev('Options for '+t.name);options.setAttribute('data-wn-key','options-'+key);
+      options.onclick=e=>{e.stopPropagation();if(sourceView!=='team')teamReturnView=sourceView;sourceView='team';sourceDetailId=key;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();};card.append(options);
       return card;
     };
 
-    const wrap=el("div","wn-wrap"),shell=el("div","wn-source-shell");
+    const wrap=el("div","wn-wrap"),shell=el("div","wn-source-shell"+(sourceView==='apps'?' wn-apps-view':''));
     // Icon-only sidebar rail.
     const side=el("nav","wn-side");side.setAttribute("aria-label","Sources");
-    const railParent={inbox:'inbox',apps:'apps',gmail:'apps',github:'apps',calendar:'apps',scores:'apps',slack:'apps',msteams:'apps',discord:'apps',outlook:'apps',teams:'teams',settings:'settings',app:'apps'}[sourceView] || 'inbox';
+    const railParent={inbox:'inbox',apps:'apps',gmail:'apps',github:'apps',calendar:'apps',slack:'apps',msteams:'apps',discord:'apps',outlook:'apps',teams:'teams',settings:'settings',app:'apps',team:'teams'}[sourceView] || 'inbox';
     for(const [view,icon,label] of [['inbox','inbox','Inbox'],['apps','apps','Apps'],['teams','teams','Teams'],['settings','settings','Settings']]){
       const b=el('button','wn-side-btn'+(railParent===view?' wn-on':''));
       b.type='button';b.title=label;b.setAttribute('aria-label',label);b.setAttribute('data-wn-key','side-'+view);
@@ -1849,21 +1878,20 @@
     const main=el('div','wn-main');
     const top=el('div','wn-main-top');
     const titleRow=el('div','wn-main-titlerow');
-    const titles={inbox:['Inbox','Your notifications, newest first.'],apps:['Apps','Connect an app to get its notifications.'],teams:['Teams','Follow teams to track their games automatically.'],settings:['Settings','Reload, diagnostics and advanced options.'],gmail:['Mail','Choose a signed-in tab. Its account and container stay separate.'],github:['GitHub','Choose a signed-in GitHub tab to monitor its unread notification inbox.'],calendar:['Calendar','Only reminders that fire as desktop notifications appear.'],scores:['Scores tab','Choose a Google Search tab showing a live score.'],app:['Source','Source options.']};
+    const titles={inbox:['Inbox','Your notifications, newest first.'],apps:['Apps','Connect an app to get its notifications.'],teams:['Teams','Follow teams to track their games automatically.'],settings:['Settings','Reload, diagnostics and advanced options.'],gmail:['Mail','Manage paired accounts and add signed-in tabs.'],github:['GitHub','Manage paired accounts and their unread notification inboxes.'],calendar:['Calendar','Only reminders that fire as desktop notifications appear.'],app:['Source','Source options.']};
     const pickerApp=NativeApps[sourceView==='msteams'?'teams':sourceView];
-    const [ttl,sub]=titles[sourceView] || (pickerApp ? [pickerApp.label,'Connect a signed-in tab to capture future desktop alerts.'] : titles.inbox);
+    const [ttl,sub]=(sourceView==='team' ? [store.followedTeams[sourceDetailId]?.name || 'Team','Manage this followed team.'] : titles[sourceView]) || (pickerApp ? [pickerApp.label,'Manage paired connections for future desktop alerts.'] : titles.inbox);
     const head=el('div','wn-main-head');const heading=el('h1','wn-main-title',ttl);heading.tabIndex=-1;head.append(heading,el('p','wn-main-sub',sub));titleRow.append(head);
     const close=el('button','wn-main-close');close.type='button';close.title='Close';close.setAttribute('aria-label','Close panel');close.setAttribute('data-wn-key','wn-close');close.appendChild(wnIcon('close'));close.onclick=e=>{e.stopPropagation();hidePanels();};titleRow.append(close);
     top.append(titleRow);main.append(top);
     const content=el('div','wn-main-scroll');main.append(content);shell.append(main);wrap.append(shell);
 
     const section=(text,link)=>{const h=el('div','wn-section-row');h.append(el('h2','wn-section-label',text));if(link)h.append(link);content.append(h);};
-    const back=(label,view)=>{const b=el('button','wn-btn wn-small wn-back');b.type='button';b.setAttribute('data-wn-key','back-'+view);b.appendChild(wnIcon('back'));b.appendChild(document.createTextNode('Back'));b.setAttribute('aria-label','Back to '+label);b.onclick=e=>{e.stopPropagation();nav(view);};content.append(b);};
+    const back=(label,view,fn)=>{const b=el('button','wn-header-back');b.type='button';b.setAttribute('data-wn-key','back-'+view);b.appendChild(wnIcon('back'));b.title='Back to '+label;b.setAttribute('aria-label',b.title);b.onclick=e=>{e.stopPropagation();if(fn)fn();else nav(view);};titleRow.insertBefore(b,head);};
 
     if(sourceView==='inbox'){
       const undism = store.notifications.filter((n) => !store.dismissIds[n.id] && (n.service !== "gmail" || n.mailVerified) && (n.service !== "github" || n.githubVerified));
-      const hasLive = Object.values(store.followedGames).some(g=>!g.dismissed && gameActive(g));
-      if (undism.length || hasLive) {
+      if (undism.some(canClearNotification)) {
         const actions=el('div','wn-inbox-actions');
         const clear=button('Clear all',()=>{clearAllNotifications();});
         clear.setAttribute('data-wn-key','clear-all');
@@ -1877,14 +1905,14 @@
     } else if(sourceView==='apps'){
       section('Add a source');
       const counts=s=>store.connections.filter(c=>c.service===s).length;
-      const plats=[['gmail','Mail','Signed-in Gmail tabs',counts('gmail')],['github','GitHub','Unread notification inbox',counts('github')],['calendar','Calendar','Desktop reminders that fire',counts('calendar')],...Object.entries(NativeApps).filter(([key])=>key!=='calendar').map(([key,app])=>[key==='teams'?'msteams':key,app.label,'Desktop notifications',counts(key)]),['scores','Scores tab','Google Search live scores',counts('scores')],['teams','Sports team','Auto-tracked ESPN games',Object.keys(store.followedTeams).length]];
+      const plats=[['gmail','Mail','Signed-in Gmail tabs',counts('gmail')],['github','GitHub','Unread notification inbox',counts('github')],['calendar','Calendar','Desktop reminders that fire',counts('calendar')],...Object.entries(NativeApps).filter(([key])=>key!=='calendar').map(([key,app])=>[key==='teams'?'msteams':key,app.label,'Desktop notifications',counts(key)]),['teams','ESPN','Automatically track followed teams',Object.keys(store.followedTeams).length]];
       for(const [view,label,desc,n]of plats){
         const card=el('button','wn-app-card wn-platform');card.setAttribute('data-wn-key','plat-'+view);
         card.setAttribute('aria-label','Connect '+label);
-        const tile=el('span','wn-platform-tile');const entry=view==='teams'?null:NativeApps[view==='msteams'?'teams':view] || ({gmail:{url:'https://mail.google.com'},github:{url:'https://github.com'}})[view];if(entry)tile.append(appIcon({url:entry.url}));else tile.append(wnIcon('teams'));card.append(tile);
-        const meta=el('div','wn-app-meta');meta.append(el('div','wn-app-name',label),el('div','wn-app-sub',desc+(n?' · '+n+' connected':'')));card.append(meta);
+        const tile=el('span','wn-platform-tile');const entry=view==='teams'?null:NativeApps[view==='msteams'?'teams':view] || ({gmail:{url:'https://mail.google.com'},github:{url:'https://github.com'}})[view];if(entry)tile.append(appBrandIcon(view==='msteams'?'teams':view) || appIcon({url:entry.url}));else tile.append(view==='teams'?appBrandIcon('espn'):wnIcon('teams'));card.append(tile);
+        const meta=el('div','wn-app-meta');meta.append(el('div','wn-app-name',label),el('div','wn-app-sub',desc+(n?' · '+n+(view==='teams'?' followed':' connected'):'')));card.append(meta);
         const pchev=el('span','wn-chev-static');pchev.appendChild(wnIcon('chev'));card.append(pchev);
-        card.onclick=()=>{if(view==='teams'){nav('teams');loadTeamPicker();}else nav(view);};
+        card.onclick=()=>{if(view==='teams'){nav('teams');}else nav(view);};
         content.append(card);
       }
       content.append(el('p','wn-hint','Mail and GitHub mirror unread inboxes. Other apps capture desktop alerts from your connected site and container.'));
@@ -1896,29 +1924,43 @@
       const teamEntries=Object.entries(store.followedTeams);
       if(!teamEntries.length)content.append(el('p','wn-hint','Follow a team to automatically track its future games.'));
       for(const [key,t]of teamEntries)content.append(teamCard(key,t));
-    } else if(['gmail','github','calendar','scores','slack','msteams','discord','outlook'].includes(sourceView)){
+    } else if(['gmail','github','calendar','slack','msteams','discord','outlook'].includes(sourceView)){
       const pickerService=sourceView==='msteams'?'teams':sourceView;
-      back('Apps','apps');
+      const paired=store.connections.filter(c=>c.service===pickerService);
+      if(!accountPairing){
+        back('Apps','apps');
+        section((NATIVE_SERVICES.has(pickerService)?'Paired connections':'Paired accounts')+' ('+paired.length+')',button(sourceView==='calendar'?'Add calendar':'Add account',()=>{accountPairing=true;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();}));
+        if(!paired.length)content.append(el('p','wn-hint','Nothing paired yet. Add a signed-in tab to start receiving notifications.'));
+        for(const c of paired)content.append(appCard(c,true));
+        if(NATIVE_SERVICES.has(pickerService))content.append(el('p','wn-hint','Desktop alerts are grouped by site and container. Use separate containers for separate accounts.'));
+      }else{
+      back(SERVICE_LABEL[pickerService],sourceView,()=>{accountPairing=false;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();});
+      heading.textContent=sourceView==='calendar'?'Add calendar':'Add '+(SERVICE_LABEL[pickerService] || pickerService)+' account';
       if(sourceView==='calendar')content.append(el('p','wn-hint','In Google Calendar settings turn on desktop notifications and allow them for calendar.google.com in Zen. Only reminders that actually fire can appear — past and upcoming events are not listed.'));
-      if(sourceView==='scores')content.append(el('p','wn-hint','Choose a Google Search tab showing a live score.'));
       if(NATIVE_SERVICES.has(pickerService))content.append(el("p","wn-hint","Enable desktop notifications in the app and allow them in Zen. Future alerts appear here while the app is running; earlier messages are not imported."));
-      const tabs=eligibleTabs().filter(e=>e.service===pickerService && (!e.boundId || !connForSourceId(e.boundId)));
-      if(!tabs.length){content.append(el('p','wn-empty','No unconnected tabs for this app. Open it, sign in, then return here.'));const app=NativeApps[pickerService];if(app)content.append(button('Open '+app.label,()=>visit(app.url)));}
+      const tabs=eligibleTabs().filter(e=>e.service===pickerService && (!e.boundId || !connForSourceId(e.boundId)) && !paired.some(c=>!c.ical && connectionIdentity(c.service,c.url,c.containerId)===connectionIdentity(e.service,e.url,e.containerId)));
+      if(!tabs.length){content.append(el('p','wn-empty','No unconnected tabs for this app. Open it, sign in, then return here.'));const app=NativeApps[pickerService] || ({gmail:{label:'Mail',url:'https://mail.google.com/mail/'},github:{label:'GitHub',url:'https://github.com/login'}})[pickerService];if(app)content.append(button('Open '+app.label,()=>visit(app.url)));}
       content.append(button('Refresh tabs',()=>renderSourcesPanel()));
-      tabs.forEach((en,i)=>{const row=el('div','wn-source-row');row.setAttribute('data-wn-key','picker-'+i+'-'+en.containerId);row.append(el('div','wn-source-info',en.title),button('Connect',()=>{connectTab(en);nav('inbox');}));content.append(row);});
+      tabs.forEach((en,i)=>{const row=el('div','wn-source-row');row.setAttribute('data-wn-key','picker-'+i+'-'+en.containerId);row.append(el('div','wn-source-info',en.title),button(NATIVE_SERVICES.has(pickerService)?'Pair connection':'Pair account',()=>{connectTab(en);accountPairing=false;renderSourcesPanel();}));content.append(row);});
       if(sourceView==='calendar'){
         section('Subscribe to an iCal feed');
         content.append(el('p','wn-hint','Paste a calendar iCal URL (Google Calendar Settings → Integrate calendar → Secret address in iCal format). Timed events starting within 30 minutes — plus ongoing ones — appear automatically. No tab needed.'));
         const row=el('div','wn-ical-row');row.setAttribute('data-wn-key','ical-add');
         const input=el('input','wn-search');input.setAttribute('data-wn-key','ical-url');input.placeholder='https://calendar.google.com/calendar/ical/…/basic.ics';input.setAttribute('aria-label','iCal feed URL');input.setAttribute('inputmode','url');input.value=icalUrl;input.oninput=e=>{icalUrl=e.currentTarget.value;icalError='';};
         const addBtn=button('Subscribe',()=>{
-          try{addICalConnection(feedPanel.querySelector('[data-wn-key="ical-url"]')?.value || '');icalUrl='';icalError='';nav('inbox');}
+          try{addICalConnection(feedPanel.querySelector('[data-wn-key="ical-url"]')?.value || '');icalUrl='';icalError='';accountPairing=false;renderSourcesPanel();}
           catch(e){icalError=e.message;renderSourcesPanel();}
         });
         row.append(input,addBtn);content.append(row);
         if(icalError)content.append(el('div','wn-ical-error',icalError));
       }
+      }
     } else if(sourceView==='teams'){
+      const followed=Object.entries(store.followedTeams);
+      section('Followed teams ('+followed.length+')');
+      if(!followed.length)content.append(el('p','wn-hint','Follow a team below to track its games.'));
+      for(const [key,t]of followed)content.append(teamCard(key,t));
+      section('Find a team');
       const leagues=el('div','wn-leagues');leagues.setAttribute('role','group');leagues.setAttribute('aria-label','League');
       for(const league of ['nfl','nba','mlb','nhl']){const b=button(league.toUpperCase(),()=>{if(pickerLeague===league)return;pickerLeague=league;pickerTeams=[];loadTeamPicker();});b.setAttribute('aria-pressed',String(pickerLeague===league));b.setAttribute('data-wn-key','league-'+league);b.classList.toggle('wn-on',pickerLeague===league);leagues.append(b);}content.append(leagues);
       const input=el('input','wn-search');input.setAttribute('data-wn-key','team-query');input.placeholder='Search teams';input.setAttribute('aria-label','Search teams');input.value=pickerQuery;input.oninput=e=>{pickerQuery=e.currentTarget.value;renderSourcesPanel();};content.append(input);
@@ -1927,11 +1969,17 @@
       const results=el('div','wn-team-results');results.setAttribute('data-wn-key','team-results');
       for(const t of pickerTeams.filter(t=>(t.name+' '+t.abbreviation).toLowerCase().includes(pickerQuery.toLowerCase()))){const row=el('div','wn-source-row');row.setAttribute('data-wn-key','pick-'+t.id);const img=el('img','wn-source-logo');img.src=teamIconUrl(t.logo);img.alt='';img.onerror=()=>img.hidden=true;const followed=!!store.followedTeams['espn:'+t.league+':'+t.id];const follow=iconBtn(followed?'check':'plus',followed?'Following '+t.name:'Follow '+t.name,()=>{followTeam(t);renderSourcesPanel();});if(followed){follow.disabled=true;follow.classList.add('wn-is-on');}row.append(img,el('div','wn-source-info',t.name),follow);results.append(row);}content.append(results);
       if(!pickerStatus && !results.childNodes.length)content.append(el('p','wn-hint','No teams match your search.'));
-      section('Followed teams');
-      if(!Object.keys(store.followedTeams).length)content.append(el('p','wn-hint','Nothing followed yet.'));
-      for(const [key,t]of Object.entries(store.followedTeams))content.append(teamCard(key,t));
+    } else if(sourceView==='team'){
+      back(teamReturnView==='apps'?'Apps':'Teams',teamReturnView);
+      const t=store.followedTeams[sourceDetailId];
+      if(!t)content.append(el('p','wn-hint','This team is no longer followed.'));
+      else{
+        content.append(teamCard(sourceDetailId,t));
+        const actions=el('div','wn-detail-actions');
+        actions.append(button('Open team page',()=>visit(t.url)),button('Unfollow team',()=>{unfollowTeam(sourceDetailId);nav(teamReturnView);}));content.append(actions);
+      }
     } else if(sourceView==='app'){
-      back('Apps','apps');
+      back(sourceReturnView==='apps'?'Apps':SERVICE_LABEL[sourceReturnView==='msteams'?'teams':sourceReturnView] || 'Apps',sourceReturnView);
       const c=connForSourceId(sourceDetailId);
       if(!c){content.append(el('p','wn-hint','This source no longer exists.'));}
       else{
@@ -1942,30 +1990,31 @@
         meta.append(el('div','wn-app-sub',appSub(c)));
         const st=el('div','wn-app-status');st.append(dot(!c.paused));const sTxt=el('span','',connStatusText(c));sTxt.title=connStatusText(c);st.append(sTxt);meta.append(st);
         hero.append(meta);content.append(hero);
-        content.append(toggle(!c.paused,'Monitor '+(SERVICE_LABEL[c.service] || c.service),()=>setPaused(c,!c.paused)));
+        content.append(toggle(!c.paused,'Monitor '+(SERVICE_LABEL[c.service] || c.service)+' '+appSub(c),()=>setPaused(c,!c.paused)));
         const acts=el('div','wn-detail-actions');
         if(!c.ical)acts.append(button('Open',()=>openConn(c)));
         if(NATIVE_SERVICES.has(c.service) && !c.ical)acts.append(button(c.service==='calendar'?'Send test reminder':'Send test alert',()=>{try { Sources?.sendTestReminder?.(c.id); } catch (_e) {} renderAll();}));
-        else if(c.service==='scores')acts.append(button('Scan and follow game',()=>followTabAsGame(c.id)));
         else if(c.ical)acts.append(button('Poll now',()=>{try { Sources?.pollNow?.(c.id); } catch (_e) {} renderAll();}));
         else acts.append(button('Refresh',()=>scanSource(c.id)));
-        acts.append(button('Disconnect',()=>{disconnect(c);nav('inbox');}));
+        acts.append(button('Disconnect',()=>{disconnect(c);nav(sourceReturnView);}));
         content.append(acts);
         if(c.containerId)content.append(el('div','wn-detail-line','Container '+c.containerId));
         if(c.url)content.append(el('div','wn-detail-line',c.url));
-        if(c.service==='scores'){
-          for(const [key,g] of Object.entries(store.followedGames).filter(([,g])=>g.sourceId===c.id)){
-            const match=el('div','wn-score-card');match.setAttribute('data-wn-key',key);const actions=el('div','wn-score-actions');match.append(el('span','wn-score-status',g.status || 'Game'),scoreBoard(g),el('span','wn-match-caption',g.away+' vs '+g.home));actions.append(button(g.dismissed?'Follow':'Unfollow',()=>{g.dismissed=!g.dismissed;broadcast(window);renderAll();}),button('Show in workspace',()=>{g.dismissed=false;g.showInTitle=true;g.pinFinal=/final/i.test(g.status);store.titleGameKey=key;broadcast(window);renderAll();}));match.append(actions);content.append(match);
-          }
-        }
       }
     } else if(sourceView==='settings'){
+      section('Notification popups');
+      const popupRow=el('div','wn-source-row');popupRow.setAttribute('data-wn-key','popup-settings');
+      popupRow.append(el('div','wn-source-info','New notifications, scoring and game periods'),toggle(getPref('popups.enabled',true),'Show notification popups',()=>{
+        const enabled=!getPref('popups.enabled',true);Services.prefs.setBoolPref('workspace-notifications.popups.enabled',enabled);
+        if(!enabled)for(const w of allNormalWindows())w.WorkspaceNotifications?.clearPopups?.();renderAll();
+      }));content.append(popupRow);
+      const testPopup=button('Send test notification',()=>sendTestNotification());testPopup.setAttribute('data-wn-key','test-popup');testPopup.disabled=!getPref('popups.enabled',true);content.append(testPopup);
       section('Tab reload settings');
       for(const c of store.connections.filter(c=>!NATIVE_SERVICES.has(c.service))){const row=el('div','wn-source-row');row.setAttribute('data-wn-key','settings-'+c.id);row.append(el('div','wn-source-info',c.label || SERVICE_LABEL[c.service]),button('Reload',()=>reloadSource(c.id)),toggle(c.bgRefresh,'Auto-reload '+c.label,()=>{c.bgRefresh=!c.bgRefresh;broadcast(window);renderAll();}));content.append(row);}
       section('Diagnostics');content.append(el('pre','wn-diag',diagnosticsText()));
       content.append(button('Copy diagnostics',()=>{Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString(diagnosticsText());}),button('Refresh all',()=>{for(const c of store.connections)scanSource(c.id);for(const t of Object.values(store.followedTeams))Sources.refresh(t.league);Sources.sync();}));
     }
-    commitPanel(wrap,'sources:'+sourceView+(sourceView==='app' ? ':'+sourceDetailId : ''));
+    commitPanel(wrap,'sources:'+sourceView+(accountPairing?':pair':'')+(['app','team'].includes(sourceView) ? ':'+sourceDetailId : ''));
   }
   async function loadTeamPicker() {
     const generation=++pickerGeneration,league=pickerLeague;pickerStatus='Loading teams\u2026';renderSourcesPanel();
@@ -2170,6 +2219,9 @@
     ensureActorRegistered();
     ({compareNotifications,notificationTime}=ChromeUtils.importESModule("resource://workspace-notifications/NotificationData.sys.mjs"));
     ({NATIVE_APPS:NativeApps,nativeServiceForURL}=ChromeUtils.importESModule("resource://workspace-notifications/NotificationApps.sys.mjs"));
+    ({gameTransitions,gameScoreStatus}=ChromeUtils.importESModule("resource://workspace-notifications/NotificationGameEvents.sys.mjs"));
+    const {NotificationPopups}=ChromeUtils.importESModule("resource://workspace-notifications/NotificationPopups.sys.mjs");
+    Popups=new NotificationPopups(window,{canShow:()=>isEnabled() && getPref('popups.enabled',true) && !isPrivateWindow(window),onOpen:payload=>{const n=store.notifications.find(n=>n.id===payload.notificationId);if(n?.kind==='auth')openNotification(n);else openFeedPanel(null,true);}});
     ({Sources}=ChromeUtils.importESModule("resource://workspace-notifications/NotificationSources.sys.mjs"));
     detachSources=Sources.attach({window,getState:()=>({...store,enabled:isEnabled()}),onEvent:handleSourceEvent});
     loadStore();
@@ -2179,6 +2231,7 @@
     try { Services.obs.addObserver(onObs, OBS_TOPIC); } catch (_e) {}
     window.addEventListener("unload", () => {
       detachSources?.();
+      Popups?.destroy();
       try { Services.obs.removeObserver(onObs, OBS_TOPIC); } catch (_e) {}
       try { if (saveTimer) clearTimeout(saveTimer); } catch (_e) {}
       if (renderTimer) clearTimeout(renderTimer);
@@ -2196,15 +2249,17 @@
 
     // Title rebind loop (cheap): covers workspace creation/session restore races.
     setInterval(() => { ensureTitleBound(); }, 5000);
-    logEvent("initialized", {version: "1.9.0", connections: store.connections.length}, "info");
+    void loadTeamPicker();
+    logEvent("initialized", {version: "1.14.1", connections: store.connections.length}, "info");
   }
 
   window.WorkspaceNotifications = {
+    showPopup:payload=>Popups?.show(payload),
+    clearPopups:()=>Popups?.clear(),
     openFeed: () => openFeedPanel(null, true),
     openSources: () => openSourcesPanel(),
     scan: (id) => scanSource(id),
     scanAll: () => { for (const cc of store.connections) scanSource(cc.id); },
-    followTabAsGame: (id) => followTabAsGame(id),
     followTeam, unfollowTeam,
     unpin: () => unpinFromIndicator(),
     clearAll: () => clearAllNotifications(),

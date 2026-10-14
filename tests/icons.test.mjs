@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {gameScoreStatus} from '../NotificationGameEvents.sys.mjs';
 
 // Structural checks for the icon pipeline without a browser DOM.
 function fakeEl(tag) {
@@ -12,6 +13,7 @@ function fakeEl(tag) {
     setAttribute(k, v) { this.attrs[k] = String(v); },
     getAttribute(k) { return Object.hasOwn(this.attrs, k) ? this.attrs[k] : null; },
     appendChild(c) { this.children.push(c); return c; },
+    append(...nodes) {this.children.push(...nodes);},
   };
 }
 
@@ -55,4 +57,25 @@ test('tabbed sources still resolve to favicon images',() => {
   const img = appIcon({sourceId: 'missing', url: 'https://example.com/app'});
   assert.equal(img.tag, 'img');
   assert.equal(img.src, 'page-icon:https://example.com/app');
+});
+
+test('the shared score renderer puts the reported clock directly beneath the score',()=>{
+  const src=readFileSync(new URL('../workspace-notifications.uc.js',import.meta.url),'utf8');
+  const render=src.match(/function scoreBoard\(g\) \{[\s\S]*?\n  \}/)[0];
+  const sandbox={document:{createElement:fakeEl},teamIconUrl:()=>'',gameScoreStatus,scoreText:()=> 'Steelers 24 – 27 Browns · Q3 ● 9:47'};
+  vm.createContext(sandbox);vm.runInContext(render,sandbox);
+  const board=sandbox.scoreBoard({away:'Steelers',home:'Browns',awayScore:'24',homeScore:'27',period:3,displayClock:'9:47',sport:'football'});
+  const center=board.children[1];assert.equal(center.className,'wn-score-center');assert.equal(center.children[0].children[0].className,'wn-score-away');assert.equal(center.children[0].children[0].textContent,'24');assert.equal(center.children[0].children[1].className,'wn-score-home');assert.equal(center.children[0].children[1].textContent,'27');assert.equal(center.children[1].textContent,'Q3 ● 9:47');assert.match(board.attrs['aria-label'],/9:47/);
+});
+
+
+test('Apps provider logos resolve to bundled assets instead of uncached page icons',()=>{
+  const src=readFileSync(new URL('../workspace-notifications.uc.js',import.meta.url),'utf8');
+  const render=src.match(/function appBrandIcon\(service\) \{[\s\S]*?\n  \}/)[0];
+  const sandbox={document:{createElement:fakeEl}};vm.createContext(sandbox);vm.runInContext(render,sandbox);
+  for(const service of ['gmail','github','calendar','slack','teams','discord','outlook','espn']){
+    const icon=sandbox.appBrandIcon(service);assert.match(icon.src,/^resource:\/\/workspace-notifications\/icons\//);
+    const file=icon.src.split('/').at(-1);assert.ok(readFileSync(new URL('../icons/'+file,import.meta.url)).length>100);
+  }
+  assert.equal(sandbox.appBrandIcon('unknown'),null);
 });
