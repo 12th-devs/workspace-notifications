@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Workspace Notifications
 // @description    Shared notifications and live scores before the native workspace menu.
-// @version        1.14.1
+// @version        1.15.2
 // @author         Workspace Notifications
 // @namespace      https://github.com/zen-browser/desktop
 // ==/UserScript==
@@ -20,6 +20,7 @@
   const MAX_NOTIFICATIONS = 100;
   const NOTIF_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  const LIVE_EXPIRY_MS = 2 * 60 * 60 * 1000;
   const MIN_REFRESH_MS = 2 * 60 * 1000;
 
   const SERVICE_LABEL = { gmail: "Mail", github: "GitHub", calendar: "Calendar", espn: "ESPN", slack: "Slack", teams: "Microsoft Teams", discord: "Discord", outlook: "Outlook" };
@@ -150,6 +151,19 @@
     }
     broadcast(window); renderAll();
   }
+  function archiveGameFinal(game,quiet=false) {
+    const id=game.id+':final';
+    store.notifications=store.notifications.filter(n=>n.game?.key!==game.id || n.id===id);
+    const existing=store.notifications.find(n=>n.id===id);
+    const fields={summary:scoreText(game),detail:game.status || 'Final',url:game.url,game:{...scoreSnapshot(game),key:game.id,final:true}};
+    if(existing)Object.assign(existing,fields);
+    else if(!game.finalAlerted){
+      const n={id,service:'espn',sourceId:game.id,...fields,ts:Date.now(),seen:quiet,kind:'game'};
+      if(quiet)pushQuiet(n);else pushNotification(n);
+    }
+    game.finalAlerted=true;
+    if(store.titleGameKey===game.id)store.titleGameKey='';
+  }
   function handleSourceEvent(event) {
     let changed=false;
     if (event.type === "error") {logEvent("source error",{error:event.message},"error"); return;}
@@ -170,16 +184,17 @@
     } else if (event.type === "game") {
       const g=event.game; if (!gameActive(g)) return;
       const prev=store.followedGames[g.id];
-      store.followedGames[g.id]={...prev,...g,sourceId:g.id,lastUpdate:Date.now(),dismissed:prev?.dismissed || false};
+      store.followedGames[g.id]={...prev,...g,sourceId:g.id,lastUpdate:Date.now(),liveExpired:false,dismissed:prev?.dismissed || false};
+      store.notifications=store.notifications.filter(n=>n.id!==g.id+':expired');
       announceGameChanges(prev,store.followedGames[g.id]);
       for (const t of Object.values(store.followedTeams)) if (t.league===g.league && g.teamIds.includes(t.id)) {
         t.schedule=(t.schedule || []).filter(x=>x.id!==g.id).concat(g).sort((a,b)=>a.startTs-b.startTs);
       }
-      if ((g.state==='in' && !prev?.startAlerted) || (g.completed && !prev?.finalAlerted)) {
-        const kind=g.completed ? 'final' : 'start';
-        store.followedGames[g.id][g.completed ? 'finalAlerted' : 'startAlerted']=true;
-        const n={id:g.id+":"+kind,service:"espn",sourceId:g.id,summary:scoreText(g),detail:g.status,url:g.url,ts:Date.now(),seen:!prev && g.completed,kind:"game",game:{...scoreSnapshot(g),key:g.id,final:g.completed}};
-        if (!prev && g.completed) pushQuiet(n); else pushNotification(n);
+      if(g.completed){
+        archiveGameFinal(store.followedGames[g.id],!prev);
+      }else if(g.state==='in' && !prev?.startAlerted){
+        store.followedGames[g.id].startAlerted=true;
+        pushNotification({id:g.id+':start',service:'espn',sourceId:g.id,summary:scoreText(g),detail:g.status,url:g.url,ts:Date.now(),seen:false,kind:'game',game:{...scoreSnapshot(g),key:g.id,final:false}});
       }
       changed=true;
     } else if (event.type === "calendar" || event.type === "native") {
@@ -341,9 +356,24 @@
     for(const n of state.notifications)if(n.service==='scores' && n.game?.provider==='espn')n.service='espn';
   }
 
+  function expireLiveNotifications(now=Date.now()) {
+    let changed=false;
+    for(const [key,g]of Object.entries(store.followedGames)){
+      const last=g.lastUpdate || g.startTs;
+      if(!gameIsLive(g) || !last || now-last<LIVE_EXPIRY_MS)continue;
+      g.liveExpired=true;if(store.titleGameKey===key)store.titleGameKey='';
+      store.notifications=store.notifications.filter(n=>n.game?.key!==key);
+      const id=key+':expired';
+      if(!store.dismissIds[id])store.notifications.push({id,service:'espn',sourceId:key,summary:'Last reported score: '+g.away+' '+g.awayScore+' ? '+g.homeScore+' '+g.home,detail:'Live updates stopped. Waiting for a confirmed final score.',url:g.url,ts:now,seen:false,kind:'game',game:{...scoreSnapshot(g),key,final:false}});
+      changed=true;
+    }
+    for(const n of store.notifications)if(n.nativeActive && now-n.ts>=LIVE_EXPIRY_MS){n.nativeActive=false;changed=true;}
+    return changed;
+  }
   function prune(now) {
     now = now || Date.now();
     retireGoogleScoreConnections(store);
+    expireLiveNotifications(now);
     // Remove only the known toolbar controls emitted by the old Calendar adapter.
     store.notifications = store.notifications.filter((n) => !(n.service === "calendar" && /^(close|go back|main menu)$/i.test(n.summary.trim()) && (!n.detail || n.detail.trim() === n.summary.trim())));
     store.notifications = store.notifications.filter((n) => (n.service === "gmail" || n.nativeActive || now - n.ts < NOTIF_TTL_MS)).sort(compareNotifications).slice(0, MAX_NOTIFICATIONS);
@@ -956,7 +986,7 @@
     if (g.provider === "espn") return Object.values(store.followedTeams).some(t=>!t.paused && t.league===g.league && g.teamIds?.includes(t.id));
     const c=connForSourceId(g.sourceId); return !!c && !c.paused;
   }
-  function gameIsLive(g) { return g.provider === "espn" ? g.state === "in" : isLiveStatus(g.status); }
+  function gameIsLive(g) { if(g.liveExpired)return false; return g.provider === "espn" ? g.state === "in" : isLiveStatus(g.status); }
   // Newest verified notification, kept on the workspace indicator until the
   // user dismisses or opens it. Score-progress updates are excluded here;
   // they show through the live-score board path instead. Unpinned items stay
@@ -2126,6 +2156,7 @@
     } catch (_e) {}
     const interval = refreshIntervalMs();
     const now = Date.now();
+    if(expireLiveNotifications(now)){broadcast(window);renderAll();}
     for (const conn of store.connections) {
       if (!conn.bgRefresh || conn.paused || NATIVE_SERVICES.has(conn.service)) continue;
       if (now - (conn._lastRefresh || 0) < interval) continue;
@@ -2250,7 +2281,7 @@
     // Title rebind loop (cheap): covers workspace creation/session restore races.
     setInterval(() => { ensureTitleBound(); }, 5000);
     void loadTeamPicker();
-    logEvent("initialized", {version: "1.14.1", connections: store.connections.length}, "info");
+    logEvent("initialized", {version: "1.15.2", connections: store.connections.length}, "info");
   }
 
   window.WorkspaceNotifications = {

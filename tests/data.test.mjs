@@ -77,7 +77,7 @@ function harness() {
   const window={addEventListener(){},PrivateBrowsingUtils:{isWindowPrivate:()=>false},popups:[],briefs:[],promptCalls:[],transitions:gameTransitions};
   const document={readyState:'loading'};
   let source=readFileSync(new URL('../workspace-notifications.uc.js',import.meta.url),'utf8');
-  source=source.replace('  if (document.readyState === "complete") init();','  window.test={requestAccountSignin,clearAccountSignin,showAccountSignin,acknowledgeInbox,clearAllNotifications,dismissNotification,canClearNotification,currentScoreGame,hideGameFromWorkspace,loadStore,ingestGmail,ingestGitHub,onNewBrief,prune,serialize,handleSourceEvent,gameActive,unpinFromIndicator,currentPinnedNotification,addICalConnection}; compareNotifications=window.compare; gameTransitions=window.transitions; emitPopup=p=>window.popups.push(p); onNewBrief=n=>window.briefs.push(n); renderAll=()=>{}; renderTitle=()=>{};\n  if (false) init();');
+  source=source.replace('  if (document.readyState === "complete") init();','  window.test={expireLiveNotifications,requestAccountSignin,clearAccountSignin,showAccountSignin,acknowledgeInbox,clearAllNotifications,dismissNotification,canClearNotification,currentScoreGame,hideGameFromWorkspace,loadStore,ingestGmail,ingestGitHub,onNewBrief,prune,serialize,handleSourceEvent,gameActive,unpinFromIndicator,currentPinnedNotification,addICalConnection}; compareNotifications=window.compare; gameTransitions=window.transitions; emitPopup=p=>window.popups.push(p); onNewBrief=n=>window.briefs.push(n); renderAll=()=>{}; renderTitle=()=>{};\n  if (false) init();');
   window.compare=compareNotifications;
   vm.runInNewContext(source,{window,document,Services:{prompt:{BUTTON_POS_0:1,BUTTON_TITLE_IS_STRING:127,BUTTON_POS_1:256,BUTTON_TITLE_CANCEL:2,confirmEx(...args){window.promptCalls.push(args);return 1;}},dirsvc:{get:()=>({path:'profile'})},prefs:{getBoolPref:(_p,d)=>d},obs:{notifyObservers(){}}},Ci:{nsIFile:{}},URL,console,setTimeout:()=>0,clearTimeout(){},IOUtils:{readUTF8:()=>Promise.resolve(JSON.stringify(window.disk)),writeUTF8:()=>Promise.resolve()},PathUtils:{join:(...s)=>s.join('/')}});
   return {t:window.test,store:window.WorkspaceNotifications.store,window};
@@ -149,9 +149,9 @@ test('following both competitors yields one start/final alert per event and hand
   t.handleSourceEvent({type:'game',game});t.handleSourceEvent({type:'game',game:{...game,homeScore:'28'}});
   assert.equal(store.notifications.length,1);assert.equal(Object.keys(store.followedGames).length,1);
   t.handleSourceEvent({type:'game',game:{...game,state:'post',completed:true}});t.handleSourceEvent({type:'game',game:{...game,state:'post',completed:true}});
-  assert.equal(store.notifications.length,2);
-  t.handleSourceEvent({type:'game',game:{...game,id:'espn:nfl:two'}});assert.equal(store.notifications.length,3);
-  Object.values(store.followedTeams).forEach(t=>t.paused=true);t.handleSourceEvent({type:'game',game:{...game,id:'ignored'}});assert.equal(store.notifications.length,3);
+  assert.equal(store.notifications.length,1);
+  t.handleSourceEvent({type:'game',game:{...game,id:'espn:nfl:two'}});assert.equal(store.notifications.length,2);
+  Object.values(store.followedTeams).forEach(t=>t.paused=true);t.handleSourceEvent({type:'game',game:{...game,id:'ignored'}});assert.equal(store.notifications.length,2);
 });
 test('Calendar replacements update one card and stale close callbacks cannot close its replacement',()=>{
   const {t,store}=harness();store.connections=[{id:'cal',service:'calendar',url:'https://calendar.google.com'}];
@@ -278,4 +278,30 @@ test('sign-in failures notify once per account and opening uses the native dialo
   t.requestAccountSignin(conn);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);assert.equal(window.briefs.length,1);assert.equal(store.notifications[0].kind,'auth');
   t.showAccountSignin(store.notifications[0]);assert.equal(window.promptCalls.length,1);assert.equal(window.promptCalls[0][1],'Sign in to Mail');assert.equal(window.promptCalls[0][4],'Open sign-in page');
   store.dismissIds['auth:mail']=Date.now();t.clearAccountSignin(conn);assert.equal(store.notifications.length,0);assert.equal(store.dismissIds['auth:mail'],undefined);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);
+});
+
+
+test('confirmed final results replace the live start alert once and accept score corrections',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'23',league:'nfl'}};
+  const game=parseGames({events:[event('archive')]},'nfl')[0];t.handleSourceEvent({type:'game',game});
+  const final={...game,state:'post',completed:true,status:'Final'};t.handleSourceEvent({type:'game',game:final});
+  assert.equal(store.notifications.length,1);assert.equal(store.notifications[0].id,game.id+':final');assert.equal(store.notifications[0].game.final,true);assert.equal(t.currentScoreGame(),null);assert.equal(t.canClearNotification(store.notifications[0]),true);
+  t.handleSourceEvent({type:'game',game:{...final,homeScore:'31'}});assert.equal(store.notifications.length,1);assert.equal(store.notifications[0].game.homeScore,'31');
+});
+
+
+test('stale live cards expire after two hours and a later confirmed final replaces the last score',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'23',league:'nfl'}};
+  const game=parseGames({events:[event('stale')]},'nfl')[0];t.handleSourceEvent({type:'game',game});const now=store.followedGames[game.id].lastUpdate;
+  store.notifications.push({id:'reminder',service:'calendar',nativeActive:true,summary:'Meeting',ts:now});
+  assert.equal(t.expireLiveNotifications(now+7200000-1),false);assert.equal(t.expireLiveNotifications(now+7200000),true);assert.equal(t.currentScoreGame(),null);
+  const expired=store.notifications.find(n=>n.id===game.id+':expired');assert.ok(expired);assert.equal(expired.game.final,false);assert.equal(t.canClearNotification(expired),true);assert.equal(store.notifications.find(n=>n.id==='reminder').nativeActive,false);
+  assert.equal(t.expireLiveNotifications(now+7200001),false);
+  t.handleSourceEvent({type:'game',game:{...game,state:'post',completed:true,status:'Final'}});assert.equal(store.notifications.filter(n=>n.game?.key===game.id).length,1);assert.equal(store.notifications.find(n=>n.game?.key===game.id).game.final,true);
+});
+
+test('fresh updates extend the live-card expiry without duplicate archive entries',()=>{
+  const {t,store}=harness();store.followedTeams={team:{id:'23',league:'nfl'}};const game=parseGames({events:[event('fresh')]},'nfl')[0];t.handleSourceEvent({type:'game',game});
+  const current=store.followedGames[game.id];current.lastUpdate=Date.now()-7100000;assert.equal(t.expireLiveNotifications(),false);
+  t.handleSourceEvent({type:'game',game:{...game,homeScore:'28'}});assert.equal(t.expireLiveNotifications(Date.now()+7000000),false);assert.equal(t.currentScoreGame().key,game.id);
 });

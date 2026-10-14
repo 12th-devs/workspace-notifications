@@ -164,26 +164,28 @@
 .wn-picker .wn-empty { padding: 12px 0 4px; text-align: start; font-size: 11px; }
 
 /* Real row placement immediately before Zen's workspace action/menu button. */
-.wn-notification-bar { order: 4; display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-inline-start: auto; max-width: 132px; cursor: pointer; }
-.wn-notification-bar .wn-title-overlay { flex: 0 1 auto; max-width: 104px; min-width: 0; transition: max-width 120ms; }
-/* Text shrinks on hover/focus so the minus button fits inside the container. */
-.wn-notification-bar:hover .wn-title-overlay,
-.wn-notification-bar:focus-within .wn-title-overlay,
-.wn-notification-bar.wn-ind-hover .wn-title-overlay { max-width: 82px; }
-/* Far-right minus: hidden until the bar or anywhere on the workspace
-   indicator is hovered or keyboard-focused, so it never takes space unless
-   it fits next to the shrunken text. */
+.zen-current-workspace-indicator:has(> .wn-notification-bar) > .zen-current-workspace-indicator-name { flex: 1 1 0; min-width: 0; }
+.zen-current-workspace-indicator:has(> .wn-notification-bar) > .zen-workspaces-actions { flex-shrink: 0; }
+.wn-notification-bar { order: 4; display: flex; align-items: center; gap: 4px; flex: 0 1 104px; width: 104px; min-width: 0; max-width: 104px; margin-inline-start: auto; cursor: pointer; }
+.wn-notification-bar:not(:has(.wn-title-overlay.wn-show)) { flex-basis: 0; width: 0; gap: 0; }
+/* The text and minus share one fixed budget; showing the button shrinks text. */
+.wn-notification-bar .wn-title-overlay { flex: 1 1 0; max-width: 100%; min-width: 0; }
+.wn-notification-bar .wn-title-overlay:not(.wn-score) { overflow: hidden; }
+/* Match the native menu image's 26px hit target and 14px glyph. */
 .wn-notification-bar .wn-unpin {
-  appearance: none; border: 0; border-radius: 4px; background: transparent;
-  color: inherit; opacity: .65; width: 18px; min-width: 18px; height: 18px; padding: 0;
+  appearance: none; border: 0; border-radius: max(calc(var(--border-radius-medium, 8px) - 4px), 4px); background: transparent;
+  color: inherit; opacity: .65; box-sizing: border-box; width: 26px; min-width: 26px; height: 26px; padding: 0 !important; margin: 0 !important;
   display: none; align-items: center; justify-content: center;
   cursor: pointer; flex-shrink: 0;
 }
-.wn-notification-bar .wn-unpin .wn-ico { width: 12px; height: 12px; min-width: 12px; }
+.wn-notification-bar .wn-unpin .wn-ico { width: 14px; height: 14px; min-width: 14px; }
 .wn-notification-bar:hover .wn-unpin:not([hidden]),
 .wn-notification-bar:focus-within .wn-unpin:not([hidden]),
 .wn-notification-bar.wn-ind-hover .wn-unpin:not([hidden]) { display: flex; }
-.wn-notification-bar .wn-unpin:hover { background: var(--wn-hover, rgba(128, 128, 128, .2)); opacity: 1; }
+/* The minus replaces the native menu only while the minus is visible. */
+.zen-current-workspace-indicator:has(> .wn-notification-bar:is(:hover, :focus-within, .wn-ind-hover) > .wn-unpin:not([hidden])) > .zen-workspaces-actions { display: none !important; }
+.wn-notification-bar:is(:hover, :focus-within, .wn-ind-hover):has(> .wn-unpin:not([hidden])) { flex-basis: 134px; width: 134px; max-width: 134px; }
+.wn-notification-bar .wn-unpin:hover { background: var(--toolbarbutton-background-color-hover); opacity: 1; }
 .wn-notification-bar .wn-unpin:focus-visible { outline: 2px solid AccentColor; outline-offset: 1px; }
 .wn-notification-bar .wn-unpin[hidden] { display: none; }
 
