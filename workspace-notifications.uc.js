@@ -1912,7 +1912,7 @@
     const pickerApp=NativeApps[sourceView==='msteams'?'teams':sourceView];
     const [ttl,sub]=(sourceView==='team' ? [store.followedTeams[sourceDetailId]?.name || 'Team','Manage this followed team.'] : titles[sourceView]) || (pickerApp ? [pickerApp.label,'Manage paired connections for future desktop alerts.'] : titles.inbox);
     const head=el('div','wn-main-head');const heading=el('h1','wn-main-title',ttl);heading.tabIndex=-1;head.append(heading,el('p','wn-main-sub',sub));titleRow.append(head);
-    const close=el('button','wn-main-close');close.type='button';close.title='Close';close.setAttribute('aria-label','Close panel');close.setAttribute('data-wn-key','wn-close');close.appendChild(wnIcon('close'));close.onclick=e=>{e.stopPropagation();hidePanels();};titleRow.append(close);
+    // No close button: dismissal is automatic via noautohide, mouseleave, and Escape.
     top.append(titleRow);main.append(top);
     const content=el('div','wn-main-scroll');main.append(content);shell.append(main);wrap.append(shell);
 
