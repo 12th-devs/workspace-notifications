@@ -46,3 +46,19 @@ test('Atom failures preserve successful cache and never turn the rendered mailbo
   const {doc,actor}=atomFixture();await actor._gmailSnapshot(doc,'https://mail.google.com/mail/u/1/','manual');const cache=actor._atomCache;
   actor.contentWindow.fetch=async()=>({ok:false,status:401});const failed=await actor._gmailSnapshot(doc,'https://mail.google.com/mail/u/1/','manual');assert.equal(failed.ready,false);assert.equal(failed.signin,true);assert.equal(failed.meta.mode,'atom');assert.equal(actor._atomCache,cache);
 });
+test('Atom fetch suppresses the HTTP Basic auth dialog via mozBackgroundRequest',async()=>{
+  const {doc,actor}=atomFixture();let seen={};
+  actor.contentWindow={AbortController,setTimeout:()=>1,clearTimeout(){},XMLHttpRequest:class {
+    constructor(){seen.instance=this;}
+    open(m,u){seen.method=m;seen.url=u;}
+    setRequestHeader(){}
+    send(){this.status=401;this.responseURL=seen.url;this.responseText='';if(this.onload)this.onload();}
+  }};
+  const res=await actor._fetchAtomText('https://mail.google.com/mail/u/0/feed/atom',{aborted:false,addEventListener(){}});
+  assert.equal(seen.instance.mozBackgroundRequest,true);
+  assert.equal(res.status,401);
+  actor.contentWindow={AbortController,setTimeout:()=>1,clearTimeout(){},fetch:async()=>({ok:false,status:401})};
+  delete actor._atomCache;
+  const failed=await actor._gmailSnapshot(doc,'https://mail.google.com/mail/u/0/','manual');
+  assert.equal(failed.signin,true);
+});

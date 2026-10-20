@@ -275,7 +275,7 @@ for(const service of ['gmail','github']){
 
 test('sign-in failures notify once per account and opening uses the native dialog',()=>{
   const {t,store,window}=harness(),conn={id:'mail',service:'gmail',url:'https://mail.google.com/mail/u/1/',containerId:2};store.connections=[conn];
-  t.requestAccountSignin(conn);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);assert.equal(window.briefs.length,1);assert.equal(store.notifications[0].kind,'auth');
+  t.requestAccountSignin(conn);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);assert.equal(window.briefs.length,0);assert.equal(store.notifications[0].kind,'auth');assert.equal(t.currentPinnedNotification(),null);
   t.showAccountSignin(store.notifications[0]);assert.equal(window.promptCalls.length,1);assert.equal(window.promptCalls[0][1],'Sign in to Mail');assert.equal(window.promptCalls[0][4],'Open sign-in page');
   store.dismissIds['auth:mail']=Date.now();t.clearAccountSignin(conn);assert.equal(store.notifications.length,0);assert.equal(store.dismissIds['auth:mail'],undefined);t.requestAccountSignin(conn);assert.equal(store.notifications.length,1);
 });

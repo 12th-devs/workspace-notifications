@@ -22,6 +22,9 @@
   const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
   const LIVE_EXPIRY_MS = 2 * 60 * 60 * 1000;
   const MIN_REFRESH_MS = 2 * 60 * 1000;
+  const BOOT_TS = Date.now();
+  const SIGNIN_GRACE_MS = 90 * 1000;
+  const SIGNIN_STRIKES = 2;
 
   const SERVICE_LABEL = { gmail: "Mail", github: "GitHub", calendar: "Calendar", espn: "ESPN", slack: "Slack", teams: "Microsoft Teams", discord: "Discord", outlook: "Outlook" };
   const NATIVE_SERVICES = new Set(["calendar", "slack", "teams", "discord", "outlook"]);
@@ -396,7 +399,7 @@
             store.connections = d.connections.map((c) => ({
               id: String(c.id || ("src-" + Math.random().toString(36).slice(2))),
               service: Object.hasOwn(SERVICE_LABEL,c.service) ? c.service : "gmail",
-              url: typeof c.url === "string" ? c.url.slice(0, 600) : "",
+              url: normalizeGmailUrl(typeof c.url === "string" ? c.url.slice(0, 600) : ""),
               label: typeof c.label === "string" ? c.label.slice(0, 160) : "", accountLabel:typeof c.accountLabel==="string"?c.accountLabel.slice(0,160):"",
               containerId: c.containerId | 0, ical: !!c.ical,
               paused: !!c.paused, bgRefresh: !!c.bgRefresh, listKey: c.listKey || "",
@@ -801,8 +804,14 @@
       return;
     }
     if (snap.signin) {
+      // Cold-start restores often report one transient 401 before cookies /
+      // containers settle. Require consecutive confirmations plus a boot
+      // grace window before creating the (now quiet, unpinned) auth card.
+      conn._signinStrikes = (conn._signinStrikes || 0) + 1;
       setStatus(conn, "Sign-in required", false);
-      requestAccountSignin(conn);
+      if (conn._signinStrikes >= SIGNIN_STRIKES && Date.now() - BOOT_TS >= SIGNIN_GRACE_MS) {
+        requestAccountSignin(conn);
+      }
       broadcast(window);
       renderAll();
       return;
@@ -996,6 +1005,7 @@
     const cands = store.notifications.filter((n) =>
       !store.dismissIds[n.id] &&
       !store.unpinnedIds[n.id] &&
+      n.kind !== "auth" &&
       (n.service !== "gmail" || n.mailVerified) &&
       (n.service !== "github" || n.githubVerified) &&
       !(n.kind === "game" && !n.game?.final));
@@ -1110,6 +1120,10 @@
 
   function onNewBrief(n) {
     if (isPrivateWindow(window) || !isEnabled()) return;
+    // Auth reminders stay quiet in the feed/status row. Popping a toast (and
+    // its "open sign-in" prompt) on every cold start is the launch stress to
+    // avoid; the user opens the card when ready.
+    if (n.kind === 'auth') { renderTitle(); return; }
     // The indicator derives the pinned notification from the store, so new
     // arrivals appear there and stay until dismissed or opened. No timers.
     if(!notificationIsLive(n) && (currentPinnedNotification()?.nativeActive || currentScoreGame()) && !inboxIsVisible())store.inboxPending=true;
@@ -1606,9 +1620,10 @@
   }
 
   function requestAccountSignin(conn) {
-    pushNotification({id:'auth:'+conn.id,service:conn.service,sourceId:conn.id,summary:'Sign in to '+(SERVICE_LABEL[conn.service] || conn.service),detail:'Your paired account needs you to sign in again. Open this notification to continue.',url:conn.url,ts:Date.now(),seen:false,kind:'auth'});
+    pushQuiet({id:'auth:'+conn.id,service:conn.service,sourceId:conn.id,summary:'Sign in to '+(SERVICE_LABEL[conn.service] || conn.service),detail:'Your paired account needs you to sign in again. Open this notification to continue.',url:conn.url,ts:Date.now(),seen:false,kind:'auth'});
   }
   function clearAccountSignin(conn) {
+    try { conn._signinStrikes = 0; } catch (_e) {}
     const id='auth:'+conn.id;store.notifications=store.notifications.filter(n=>n.id!==id);delete store.dismissIds[id];delete store.unpinnedIds[id];
   }
   function showAccountSignin(n) {
@@ -1629,13 +1644,13 @@
         const conn = connForSourceId(n.sourceId);
         const actor = actorForBrowser(found.tab.linkedBrowser);
         if (actor && conn?.service === "gmail" && !n.url) actor.sendAsyncMessage("WorkspaceNotifications:OpenItem", { itemId: notifItemKey(n), summary:n.summary, url:"" });
-        else if (n.url) found.win.openTrustedLinkIn(n.url, "current", {targetBrowser:found.tab.linkedBrowser, userContextId:conn?.containerId || 0});
-        else if (conn?.url) found.win.openTrustedLinkIn(conn.url, "current", {targetBrowser:found.tab.linkedBrowser, userContextId:conn.containerId || 0});
+        else if (n.url) found.win.openTrustedLinkIn(normalizeGmailUrl(n.url), "current", {targetBrowser:found.tab.linkedBrowser, userContextId:conn?.containerId || 0});
+        else if (conn?.url) found.win.openTrustedLinkIn(normalizeGmailUrl(conn.url), "current", {targetBrowser:found.tab.linkedBrowser, userContextId:conn.containerId || 0});
       } catch (_e) {}
       try { if (found.win !== window) found.win.focus(); } catch (_e) {}
     } else if (n.url) {
       try {
-        gBrowser.selectedTab = gBrowser.addTab(n.url, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+        gBrowser.selectedTab = gBrowser.addTab(normalizeGmailUrl(n.url), { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
       } catch (_e) {}
     }
   }
@@ -1688,6 +1703,20 @@
     return out;
   }
 
+  // A paired Gmail tab must never store or open the Atom endpoint itself:
+  // top-level loads of /feed/atom trigger Gmail's HTTP Basic auth dialog.
+  // Normalize any such URL back to the inbox before storing or navigating.
+  function normalizeGmailUrl(url) {
+    try {
+      const u = new URL(url);
+      if (u.hostname.toLowerCase() === "mail.google.com" && /\/feed\/atom/i.test(u.pathname)) {
+        const acct = u.pathname.match(/\/mail\/u\/(\d+)/)?.[1] || "0";
+        return "https://mail.google.com/mail/u/" + acct + "/#inbox";
+      }
+    } catch (_e) {}
+    return url;
+  }
+
   function connectionIdentity(service,value,container) {
       let scope=(value || '').split('#')[0];
       if(NATIVE_SERVICES.has(service) || service==='github')try{scope=new URL(value).origin;}catch(_e){}
@@ -1696,7 +1725,7 @@
   }
 
   function connectTab(entry) {
-    const url = validHttpsUrl(entry.url) || entry.url;
+    const url = normalizeGmailUrl(validHttpsUrl(entry.url) || entry.url);
     // Deduplicate duplicate connections to the same account/list or match.
     const key=connectionIdentity(entry.service,url,entry.containerId);
     const dupe=store.connections.find(c=>!c.ical && connectionIdentity(c.service,c.url,c.containerId)===key);
@@ -1806,6 +1835,9 @@
     try {
       const browser = found.tab.linkedBrowser;
       if (!browser || browser.webProgress?.isLoadingDocument) return;
+      try {
+        if (/mail\.google\.com\/mail\/.*\/feed\/atom/i.test(browser.currentURI?.spec || "")) return;
+      } catch (_e) {}
       browser.reload();
     } catch (_e) {}
   }
@@ -1842,14 +1874,14 @@
     const button=(text,fn)=>{const b=el("button","wn-btn wn-small",text);b.type="button";b.onclick=e=>{e.stopPropagation();fn();};return b;};
     const nav=view=>{accountPairing=false;sourceView=view;if(view==='inbox')acknowledgeInbox();sourceDetailId="";if(view==='teams' && !pickerTeams.length && !pickerStatus)loadTeamPicker();else renderSourcesPanel();feedPanel.querySelector(".wn-main-title")?.focus();};
     const openDetail=id=>{sourceReturnView=sourceView;sourceView='app';sourceDetailId=id;renderSourcesPanel();feedPanel.querySelector('.wn-main-title')?.focus();};
-    const visit=(url,containerId=0)=>{if(validHttpsUrl(url)){gBrowser.selectedTab=gBrowser.addTab(url,{userContextId:containerId,triggeringPrincipal:Services.scriptSecurityManager.getSystemPrincipal()});hidePanels();}};
+    const visit=(url,containerId=0)=>{const safe=normalizeGmailUrl(url);if(validHttpsUrl(safe)){gBrowser.selectedTab=gBrowser.addTab(safe,{userContextId:containerId,triggeringPrincipal:Services.scriptSecurityManager.getSystemPrincipal()});hidePanels();}};
     const toggle=(on,label,fn)=>{const b=button('',fn);b.setAttribute('role','switch');b.setAttribute('aria-checked',String(on));b.setAttribute('aria-label',label);b.classList.toggle('wn-on',on);return b;};
     const dot=on=>{const d=el('span','wn-dot'+(on?' on':''));d.setAttribute('aria-hidden','true');return d;};
     const chev=label=>{const b=el('button','wn-chev');b.type='button';b.title=label;b.setAttribute('aria-label',label);b.appendChild(wnIcon('chev'));return b;};
     const appSub=c=>c.accountLabel || (c.service==='gmail' ? (c.label?.match(/[\w.+-]+@[\w.-]+/)?.[0] || 'Account '+((c.url?.match(/\/u\/(\d+)/)?.[1] || '0')*1+1)) : c.service==='calendar' ? (c.ical ? 'iCal feed' : 'Google Calendar') : c.service==='github' ? (c.label && c.label!=='GitHub' ? c.label : 'GitHub session') : (c.label || c.url));
     const setPaused=(c,paused)=>{c.paused=paused;const f=findTabBySourceId(c.id);if(f){if(paused)deactivateOnTab(f.tab,c.id,false);else activateOnTab(f.win,f.tab,c);}broadcast(window);renderAll();};
     const disconnect=c=>{const f=findTabBySourceId(c.id);if(f)deactivateOnTab(f.tab,c.id);store.connections=store.connections.filter(x=>x.id!==c.id);store.notifications=store.notifications.filter(n=>n.sourceId!==c.id);for(const [key,g]of Object.entries(store.followedGames))if(g.sourceId===c.id)delete store.followedGames[key];broadcast(window);renderAll();};
-    const openConn=c=>{const f=findTabBySourceId(c.id);if(f){f.win.gBrowser.selectedTab=f.tab;if(c.service==='github')f.win.openTrustedLinkIn('https://github.com/notifications?query=is%3Aunread','current',{targetBrowser:f.tab.linkedBrowser,userContextId:c.containerId || 0});f.win.focus();hidePanels();}else{visit(c.url,c.containerId);activateOnTab(window,gBrowser.selectedTab,c);}};
+    const openConn=c=>{const f=findTabBySourceId(c.id);if(f){f.win.gBrowser.selectedTab=f.tab;if(c.service==='github')f.win.openTrustedLinkIn('https://github.com/notifications?query=is%3Aunread','current',{targetBrowser:f.tab.linkedBrowser,userContextId:c.containerId || 0});f.win.focus();hidePanels();}else{visit(normalizeGmailUrl(c.url),c.containerId);activateOnTab(window,gBrowser.selectedTab,c);}};
     const appCard=(c,accountView=false)=>{
       const card=el('div','wn-app-card wn-connected-app');card.setAttribute('data-wn-key',c.id);
       const iconWrap=el('span','wn-app-iconwrap');iconWrap.appendChild(c.ical ? appIcon(c) : appBrandIcon(c.service) || appIcon(c));card.appendChild(iconWrap);
@@ -2124,6 +2156,10 @@
       if (!tab || !browser) return false;
       if (isTabPending(tab)) return false; // do not wake discarded tabs
       if (gBrowser.selectedTab === tab) return false; // inactive tabs only
+      try {
+        const spec = browser.currentURI?.spec || "";
+        if (/mail\.google\.com\/mail\/.*\/feed\/atom/i.test(spec)) return false; // never reload the Atom endpoint as a document
+      } catch (_e) {}
       if (browser.webProgress && browser.webProgress.isLoadingDocument) return false;
       if (tab.soundPlaying || tab.hasAttribute("soundplaying")) return false;
       if (Date.now() - lastInteraction < 60 * 1000) return false;

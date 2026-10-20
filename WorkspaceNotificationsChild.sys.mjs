@@ -396,6 +396,52 @@ export class WorkspaceNotificationsChild extends JSWindowActorChild {
     } catch (error) { console.error("[WorkspaceNotifications] diagnostic delivery failed", error); }
   }
 
+  // Background Atom fetch must never trigger Gmail's HTTP Basic auth dialog
+  // (signed-out Atom returns 401 with WWW-Authenticate: Basic, and a content
+  // fetch would pop the modal in the screenshot). XHR with
+  // mozBackgroundRequest suppresses the prompt while still sending the
+  // tab's cookies/container. Falls back to fetch where XHR is unavailable
+  // (tests).
+  _fetchAtomText(feedUrl, signal) {
+    const win = this.contentWindow;
+    if (win.XMLHttpRequest) {
+      return new Promise((resolve, reject) => {
+        let xhr;
+        try {
+          xhr = new win.XMLHttpRequest();
+        } catch (e) { reject(e); return; }
+        try { xhr.mozBackgroundRequest = true; } catch (_e) {}
+        try { xhr.open("GET", feedUrl, true); } catch (e) { reject(e); return; }
+        try { xhr.withCredentials = true; } catch (_e) {}
+        try { xhr.setRequestHeader("Cache-Control", "no-cache"); } catch (_e) {}
+        try { xhr.setRequestHeader("Accept", "application/atom+xml, application/xml, text/xml, */*"); } catch (_e) {}
+        if (signal) {
+          if (signal.aborted) { reject(new Error("Aborted")); return; }
+          try { signal.addEventListener("abort", () => { try { xhr.abort(); } catch (_e) {} }, { once: true }); } catch (_e) {}
+        }
+        xhr.onload = () => {
+          try { resolve({ status: xhr.status, finalUrl: xhr.responseURL || feedUrl, text: xhr.responseText ?? "" }); }
+          catch (e) { reject(e); }
+        };
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.onabort = () => reject(new Error("Aborted"));
+        xhr.ontimeout = () => reject(new Error("Timeout"));
+        try { xhr.timeout = 8000; } catch (_e) {}
+        try { xhr.send(); } catch (e) { reject(e); }
+      });
+    }
+    return win.fetch(feedUrl, { credentials: "include", cache: "no-store", redirect: "error", signal }).then(async (response) => {
+      let text = "";
+      try { text = await response.text(); } catch (_e) { text = ""; }
+      return {
+        status: response.status,
+        ok: response.ok,
+        finalUrl: response.url || feedUrl,
+        text,
+      };
+    });
+  }
+
   async _gmailSnapshot(doc, href, reason) {
     const feedUrl = gmailFeedURL(href);
     const dom = scanGmail(doc);
@@ -409,12 +455,17 @@ export class WorkspaceNotificationsChild extends JSWindowActorChild {
     const timeout = this.contentWindow.setTimeout(() => controller.abort(), 8000);
     let out;
     try {
-      const response = await this.contentWindow.fetch(feedUrl, {credentials:"include", cache:"no-store", redirect:"error", signal:controller.signal});
-      if (!response.ok) {
-        const error=new Error("HTTP " + response.status);error.signin=response.status===401 || response.status===403;throw error;
+      const { status, finalUrl, text: xml } = await this._fetchAtomText(feedUrl, controller.signal);
+      if (status === 401 || status === 403) {
+        const error = new Error("HTTP " + status); error.signin = true; throw error;
       }
-      if(response.url && response.url!==feedUrl)throw Error('Gmail feed URL changed');
-      const xml = await response.text();
+      if (/accounts\.google\.com|ServiceLogin/i.test(finalUrl || "") || /accounts\.google\.com|ServiceLogin/i.test(xml.slice(0, 2000))) {
+        const error = new Error("Gmail login required"); error.signin = true; throw error;
+      }
+      if (status < 200 || status >= 300) {
+        throw new Error("HTTP " + status);
+      }
+      if (finalUrl && finalUrl !== feedUrl && !finalUrl.startsWith("https://mail.google.com/mail/")) throw Error('Gmail feed URL changed');
       if (xml.length > 500000) throw new Error("Feed too large");
       out = await this.sendQuery('WorkspaceNotifications:ParseGmailAtom',{sourceId:this._active.sourceId,service:'gmail',href,xml});
       if(!out?.ready)throw Error(out?.error || 'Gmail feed parser unavailable');
