@@ -413,8 +413,8 @@ export class WorkspaceNotificationsChild extends JSWindowActorChild {
         try { xhr.mozBackgroundRequest = true; } catch (_e) {}
         try { xhr.open("GET", feedUrl, true); } catch (e) { reject(e); return; }
         try { xhr.withCredentials = true; } catch (_e) {}
-        try { xhr.setRequestHeader("Cache-Control", "no-cache"); } catch (_e) {}
-        try { xhr.setRequestHeader("Accept", "application/atom+xml, application/xml, text/xml, */*"); } catch (_e) {}
+        // No custom request headers: keep this a simple same-origin GET so
+        // container/cookie states cannot turn it into a failing preflight.
         if (signal) {
           if (signal.aborted) { reject(new Error("Aborted")); return; }
           try { signal.addEventListener("abort", () => { try { xhr.abort(); } catch (_e) {} }, { once: true }); } catch (_e) {}

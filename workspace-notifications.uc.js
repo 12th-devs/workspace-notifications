@@ -25,6 +25,7 @@
   const BOOT_TS = Date.now();
   const SIGNIN_GRACE_MS = 90 * 1000;
   const SIGNIN_STRIKES = 2;
+  let lastInteraction = 0;
 
   const SERVICE_LABEL = { gmail: "Mail", github: "GitHub", calendar: "Calendar", espn: "ESPN", slack: "Slack", teams: "Microsoft Teams", discord: "Discord", outlook: "Outlook" };
   const NATIVE_SERVICES = new Set(["calendar", "slack", "teams", "discord", "outlook"]);
